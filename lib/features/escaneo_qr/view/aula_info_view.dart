@@ -3,18 +3,25 @@
 /// -----------------------------------------------------------------------------
 /// Vista mostrada tras escanear un QR exitoso. Recibe el código del aula
 /// como parámetro (Figura 47 del MPF) y muestra horario del día.
+///
+/// La UI se adapta al rol del usuario actual (apartado 4.3 del MPF):
+///   - Estudiante: ve "Docente actual" destacado y todo el horario.
+///   - Docente / Laboratorista: ve además el botón "Solicitar apertura".
 /// =============================================================================
 library;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../../core/icons/app_icons.dart';
 import '../../../core/routes/route_names.dart';
+import '../../../core/session/session_service.dart';
 import '../../../core/spacing/app_spacing.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/primary_button.dart';
 import '../model/aula_model.dart';
+import '../widgets/docente_actual_card.dart';
 import '../widgets/horario_lista.dart';
 
 class AulaInfoView extends StatelessWidget {
@@ -49,8 +56,17 @@ class AulaInfoView extends StatelessWidget {
     ),
   ];
 
+  /// Selección demo de la clase "actual". En el WS real se calculará por hora.
+  /// Es `static final` (no `const`) porque indexar una lista `const` no es
+  /// una expresión constante en Dart.
+  static final ClaseHorario _claseActualDemo = _clasesDemo[1];
+
   @override
   Widget build(BuildContext context) {
+    final session = context.watch<SessionService>();
+    final esAlumno = session.esAlumno;
+    final puedeSolicitarApertura = !esAlumno;
+
     return Scaffold(
       appBar: AppBar(title: Text('Aula $codigoAula')),
       body: ListView(
@@ -58,19 +74,28 @@ class AulaInfoView extends StatelessWidget {
         children: [
           _Encabezado(codigo: codigoAula),
           AppSpacing.vGapLg,
+          if (esAlumno) ...[
+            Text('Docente en este momento',
+                style: AppTypography.textTheme.titleLarge),
+            AppSpacing.vGapMd,
+            DocenteActualCard(clase: _claseActualDemo),
+            AppSpacing.vGapXl,
+          ],
           Text('Horario del día',
               style: AppTypography.textTheme.titleLarge),
           AppSpacing.vGapMd,
           const HorarioLista(clases: _clasesDemo),
-          AppSpacing.vGapXl,
-          PrimaryButton(
-            label: 'Solicitar apertura (laboratorio)',
-            icon: AppIcons.doorOpen,
-            onPressed: () => Navigator.of(context).pushNamed(
-              RouteNames.solicitudApertura,
-              arguments: <String, dynamic>{'codigoLab': codigoAula},
+          if (puedeSolicitarApertura) ...[
+            AppSpacing.vGapXl,
+            PrimaryButton(
+              label: 'Solicitar apertura (laboratorio)',
+              icon: AppIcons.doorOpen,
+              onPressed: () => Navigator.of(context).pushNamed(
+                RouteNames.solicitudApertura,
+                arguments: <String, dynamic>{'codigoLab': codigoAula},
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

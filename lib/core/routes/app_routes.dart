@@ -13,8 +13,10 @@ import '../../features/autenticacion/view/login_view.dart';
 import '../../features/autenticacion/view/splash_view.dart';
 import '../../features/busqueda/view/busqueda_view.dart';
 import '../../features/busqueda/view/resultados_view.dart';
+import '../../features/consulta_aulas/view/agregar_aula_view.dart';
 import '../../features/consulta_aulas/view/aula_detalle_view.dart';
 import '../../features/consulta_aulas/view/consulta_aulas_view.dart';
+import '../../features/consulta_aulas/viewmodel/consulta_viewmodel.dart';
 import '../../features/escaneo_qr/view/aula_info_view.dart';
 import '../../features/escaneo_qr/view/qr_scanner_view.dart';
 import '../../features/escaneo_qr/view/sin_conexion_view.dart';
@@ -65,7 +67,26 @@ class AppRoutes {
         );
 
       case RouteNames.busqueda:
-        return _build(const BusquedaView(), settings);
+        // BusquedaView fue diseñada para vivir embebida en HomeShell
+        // (que ya provee el Scaffold). Si se navega como ruta independiente
+        // hay que envolverla en un Scaffold para que el TabBar y los
+        // TextField encuentren un Material ancestor.
+        return _build(
+          Scaffold(
+            appBar: AppBar(title: const Text('Búsqueda')),
+            body: const BusquedaView(),
+          ),
+          settings,
+        );
+
+      case RouteNames.agregarAula:
+        // Si se navega por nombre se crea un VM aislado (no sincronizado
+        // con la lista). El flujo recomendado es abrirla desde
+        // ConsultaAulasView vía Navigator.push directo.
+        return _build(
+          AgregarAulaView(viewModel: ConsultaViewModel()),
+          settings,
+        );
 
       case RouteNames.resultadosBusqueda:
         final args = settings.arguments as Map<String, dynamic>?;

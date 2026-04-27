@@ -25,6 +25,7 @@ class RouteNames {
   // Consulta de aulas
   static const String consultaAulas = '/aulas';
   static const String aulaDetalle = '/aulas/detalle';
+  static const String agregarAula = '/aulas/nueva';
 
   // Búsqueda
   static const String busqueda = '/buscar';

@@ -15,30 +15,27 @@ import '../../../core/widgets/standard_text_field.dart';
 import '../viewmodel/login_viewmodel.dart';
 
 class LoginForm extends StatefulWidget {
-  const LoginForm({super.key, required this.onSuccess});
+  const LoginForm({
+    super.key,
+    required this.onSuccess,
+    required this.userCtrl,
+    required this.passCtrl,
+  });
 
   final VoidCallback onSuccess;
+  final TextEditingController userCtrl;
+  final TextEditingController passCtrl;
 
   @override
   State<LoginForm> createState() => _LoginFormState();
 }
 
 class _LoginFormState extends State<LoginForm> {
-  final _userCtrl = TextEditingController();
-  final _passCtrl = TextEditingController();
-
-  @override
-  void dispose() {
-    _userCtrl.dispose();
-    _passCtrl.dispose();
-    super.dispose();
-  }
-
   Future<void> _onSubmit() async {
     final vm = context.read<LoginViewModel>();
     final ok = await vm.iniciarSesion(
-      usuario: _userCtrl.text,
-      password: _passCtrl.text,
+      usuario: widget.userCtrl.text,
+      password: widget.passCtrl.text,
     );
     if (!mounted) return;
     if (ok) {
@@ -58,8 +55,8 @@ class _LoginFormState extends State<LoginForm> {
       children: [
         StandardTextField(
           label: 'Usuario',
-          hintText: 'Usuario',
-          controller: _userCtrl,
+          hintText: 'correo@toluca.tecnm.mx',
+          controller: widget.userCtrl,
           keyboardType: TextInputType.emailAddress,
           textInputAction: TextInputAction.next,
         ),
@@ -67,7 +64,7 @@ class _LoginFormState extends State<LoginForm> {
         PasswordTextField(
           label: 'Contraseña',
           hintText: 'Contraseña',
-          controller: _passCtrl,
+          controller: widget.passCtrl,
           onSubmitted: (_) => _onSubmit(),
         ),
         AppSpacing.vGapXl,

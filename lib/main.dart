@@ -7,6 +7,7 @@
 /// Responsabilidades:
 ///   - Cargar variables de entorno (.env) antes de runApp.
 ///   - Inicializar Hive (persistencia local).
+///   - Registrar SessionService global (Provider raíz).
 ///   - Configurar tema, localizaciones y rutas nombradas.
 /// =============================================================================
 library;
@@ -15,9 +16,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:provider/provider.dart';
 
 import 'core/routes/app_routes.dart';
 import 'core/routes/route_names.dart';
+import 'core/session/session_service.dart';
 import 'core/theme/app_theme.dart';
 
 Future<void> main() async {
@@ -41,24 +44,32 @@ class ControlAulasApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Control de Aulas',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      // Localización (apartado 4.2, Figura 11 del MPF).
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
+    return MultiProvider(
+      providers: [
+        // Sesión global accesible desde cualquier vista (apartado 4.3 del MPF).
+        ChangeNotifierProvider<SessionService>(
+          create: (_) => SessionService(),
+        ),
       ],
-      supportedLocales: const [
-        Locale('es'),
-        Locale('en'),
-      ],
-      locale: const Locale('es'),
-      // Navegación por rutas nombradas (Figura 46 del MPF).
-      initialRoute: RouteNames.splash,
-      onGenerateRoute: AppRoutes.generate,
+      child: MaterialApp(
+        title: 'Control de Aulas',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        // Localización (apartado 4.2, Figura 11 del MPF).
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('es'),
+          Locale('en'),
+        ],
+        locale: const Locale('es'),
+        // Navegación por rutas nombradas (Figura 46 del MPF).
+        initialRoute: RouteNames.splash,
+        onGenerateRoute: AppRoutes.generate,
+      ),
     );
   }
 }

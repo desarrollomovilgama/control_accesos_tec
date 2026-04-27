@@ -46,7 +46,9 @@ class AppIcons {
   // Dominio
   static const IconData classroom = Icons.meeting_room_outlined;
   static const IconData laboratory = Icons.science_outlined;
+  static const IconData lab = Icons.biotech_outlined;
   static const IconData teacher = Icons.school_outlined;
+  static const IconData student = Icons.person_2_outlined;
   static const IconData subject = Icons.menu_book_outlined;
   static const IconData schedule = Icons.schedule_rounded;
   static const IconData calendar = Icons.calendar_today_outlined;

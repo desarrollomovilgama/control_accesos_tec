@@ -1,13 +1,16 @@
 /// =============================================================================
 /// splash_view.dart
 /// -----------------------------------------------------------------------------
-/// Vista de bienvenida que decide si redirigir al login o al shell.
+/// Vista de bienvenida que decide si redirigir al login o al shell según
+/// el estado del SessionService global.
 /// =============================================================================
 library;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../../core/routes/route_names.dart';
+import '../../../core/session/session_service.dart';
 import '../../../core/spacing/app_spacing.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
@@ -23,11 +26,17 @@ class _SplashViewState extends State<SplashView> {
   @override
   void initState() {
     super.initState();
-    // En la versión real aquí se valida si hay sesión activa.
-    Future.delayed(const Duration(milliseconds: 1200), () {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacementNamed(RouteNames.login);
-    });
+    // En la versión real, aquí se rehidratará la sesión desde
+    // flutter_secure_storage antes de decidir la ruta de destino.
+    Future.delayed(const Duration(milliseconds: 1200), _redirigir);
+  }
+
+  void _redirigir() {
+    if (!mounted) return;
+    final session = context.read<SessionService>();
+    final destino =
+        session.autenticado ? RouteNames.home : RouteNames.login;
+    Navigator.of(context).pushReplacementNamed(destino);
   }
 
   @override

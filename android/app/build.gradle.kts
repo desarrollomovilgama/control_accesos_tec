@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -10,13 +12,12 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    // Java 11 para nuestra app. Los plugins de terceros pueden seguir en su
+    // propia versión (1.8) sin afectarnos: el warning de obsolete options se
+    // silencia desde el build.gradle.kts raíz con -Xlint:-options.
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
 
     defaultConfig {
@@ -36,6 +37,15 @@ android {
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+}
+
+// Kotlin alineado a Java 11 usando el DSL nuevo `compilerOptions`
+// (el viejo `kotlinOptions { jvmTarget = ... }` está deprecated en
+// Kotlin Gradle Plugin 2.x).
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_11)
     }
 }
 

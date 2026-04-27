@@ -11,27 +11,47 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/routes/route_names.dart';
+import '../../../core/session/session_service.dart';
 import '../../../core/spacing/app_spacing.dart';
 import '../../../core/theme/app_colors.dart';
 import '../viewmodel/login_viewmodel.dart';
+import '../widgets/demo_credentials_hint.dart';
 import '../widgets/login_footer.dart';
 import '../widgets/login_form.dart';
 import '../widgets/login_header.dart';
 
-class LoginView extends StatelessWidget {
+class LoginView extends StatefulWidget {
   const LoginView({super.key});
+
+  @override
+  State<LoginView> createState() => _LoginViewState();
+}
+
+class _LoginViewState extends State<LoginView> {
+  final TextEditingController _userCtrl = TextEditingController();
+  final TextEditingController _passCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _userCtrl.dispose();
+    _passCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => LoginViewModel(),
-      child: const _LoginScaffold(),
+      create: (ctx) => LoginViewModel(ctx.read<SessionService>()),
+      child: _LoginScaffold(userCtrl: _userCtrl, passCtrl: _passCtrl),
     );
   }
 }
 
 class _LoginScaffold extends StatelessWidget {
-  const _LoginScaffold();
+  const _LoginScaffold({required this.userCtrl, required this.passCtrl});
+
+  final TextEditingController userCtrl;
+  final TextEditingController passCtrl;
 
   void _goHome(BuildContext context) {
     Navigator.of(context).pushReplacementNamed(RouteNames.home);
@@ -50,7 +70,16 @@ class _LoginScaffold extends StatelessWidget {
               AppSpacing.vGapMd,
               const LoginHeader(),
               AppSpacing.vGapXxl,
-              LoginForm(onSuccess: () => _goHome(context)),
+              LoginForm(
+                userCtrl: userCtrl,
+                passCtrl: passCtrl,
+                onSuccess: () => _goHome(context),
+              ),
+              AppSpacing.vGapLg,
+              DemoCredentialsHint(
+                userCtrl: userCtrl,
+                passCtrl: passCtrl,
+              ),
               AppSpacing.vGapXl,
               const LoginFooter(),
               AppSpacing.vGapLg,
