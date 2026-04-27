@@ -43,9 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+<<<<<<< HEAD
 
 # Variables de entorno (apartado 7.1 del MPF)
 .env
 .env.local
 .env.*.local
 
+=======
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106

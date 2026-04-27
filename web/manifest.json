@@ -1,11 +1,20 @@
 {
+<<<<<<< HEAD
     "name": "control_aulas",
     "short_name": "control_aulas",
+=======
+    "name": "pr_c",
+    "short_name": "pr_c",
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
+<<<<<<< HEAD
     "description": "Sistema de control de aulas - Proyecto A Móvil GAMA",
+=======
+    "description": "A new Flutter project.",
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

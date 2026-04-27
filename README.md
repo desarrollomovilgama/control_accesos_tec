@@ -1,6 +1,12 @@
+<<<<<<< HEAD
 # control_aulas
 
 Sistema de control de aulas - Proyecto A Móvil GAMA
+=======
+# pr_c
+
+A new Flutter project.
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
 
 ## Getting Started
 

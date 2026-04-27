@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
+<<<<<<< HEAD
         android:label="control_aulas"
+=======
+        android:label="pr_c"
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

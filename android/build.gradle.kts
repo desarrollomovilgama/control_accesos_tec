@@ -19,6 +19,7 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+<<<<<<< HEAD
 // Silenciar el warning "source value 8 is obsolete" que provocan los
 // plugins de terceros (mobile_scanner, hive, dotenv, etc.) que aún declaran
 // sourceCompatibility = 1.8. NO podemos cambiar su Java target porque sus
@@ -35,6 +36,8 @@ subprojects {
     }
 }
 
+=======
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

@@ -4,10 +4,17 @@ project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
+<<<<<<< HEAD
 set(BINARY_NAME "control_aulas")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
 set(APPLICATION_ID "mx.com.gama.control_aulas")
+=======
+set(BINARY_NAME "pr_c")
+# The unique GTK application identifier for this application. See:
+# https://wiki.gnome.org/HowDoI/ChooseApplicationID
+set(APPLICATION_ID "com.tuempresa.pr_c")
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.

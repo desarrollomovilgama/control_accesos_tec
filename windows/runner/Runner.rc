@@ -89,6 +89,7 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
+<<<<<<< HEAD
             VALUE "CompanyName", "mx.com.gama" "\0"
             VALUE "FileDescription", "control_aulas" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
@@ -96,6 +97,15 @@ BEGIN
             VALUE "LegalCopyright", "Copyright (C) 2026 mx.com.gama. All rights reserved." "\0"
             VALUE "OriginalFilename", "control_aulas.exe" "\0"
             VALUE "ProductName", "control_aulas" "\0"
+=======
+            VALUE "CompanyName", "com.tuempresa" "\0"
+            VALUE "FileDescription", "pr_c" "\0"
+            VALUE "FileVersion", VERSION_AS_STRING "\0"
+            VALUE "InternalName", "pr_c" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.tuempresa. All rights reserved." "\0"
+            VALUE "OriginalFilename", "pr_c.exe" "\0"
+            VALUE "ProductName", "pr_c" "\0"
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

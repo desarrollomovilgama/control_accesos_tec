@@ -3,8 +3,11 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+<<<<<<< HEAD
   connectivity_plus
   flutter_secure_storage_windows
+=======
+>>>>>>> 358d57ba1357f30f64afa2c4e1ad017fde59e106
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
