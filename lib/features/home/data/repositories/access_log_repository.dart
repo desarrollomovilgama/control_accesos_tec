@@ -3,10 +3,11 @@
 /// @description: Repositorio del registro de accesos. Registra cada evento
 ///   del ciclo de vida de un visitante y provee el estado actual derivado
 ///   del último evento. También carga las visitas activas del día para
-///   el panel del Guardia.
+///   el panel del Guardia y el seguimiento de visitas para Anfitrión
+///   y Autorizador.
 /// @author: Luis Antonio Tarango Regis
-/// @version: 1.0.0
-/// @last_update: 2026-05-26
+/// @version: 2.0.0
+/// @last_update: 2026-05-31
 
 library;
 
@@ -26,11 +27,14 @@ class AccessLogRepository {
 
   // ── Escritura ──────────────────────────────────────────────────────────────
 
-  /// Registra un nuevo evento para un ítem.
+  /// Registra un nuevo evento. `registered_at` se toma de la hora local del
+  /// dispositivo vía [AccessLogDbModel.toInsertMap] para evitar el desfase
+  /// UTC del servidor Railway.
   Future<void> create(AccessLogDbModel log) async {
     await _db.execute((conn) async {
       await conn.execute(
-        'INSERT INTO access_logs (item_id, event_type) VALUES (:item_id, :event_type)',
+        '''INSERT INTO access_logs (item_id, event_type, registered_at)
+           VALUES (:item_id, :event_type, :registered_at)''',
         log.toInsertMap(),
       );
     });
@@ -39,8 +43,6 @@ class AccessLogRepository {
   // ── Consulta de estado ─────────────────────────────────────────────────────
 
   /// Retorna el último evento registrado para un ítem.
-  ///
-  /// Si no hay registros, el ítem está en estado PENDIENTE (sin acceso aún).
   Future<AccessLogDbModel?> getLatest(int itemId) async {
     return _db.execute((conn) async {
       final result = await conn.execute(
@@ -55,7 +57,7 @@ class AccessLogRepository {
     });
   }
 
-  /// Retorna el historial completo de eventos de un ítem.
+  /// Retorna el historial completo de eventos de un ítem en orden ASC.
   Future<List<AccessLogDbModel>> getHistory(int itemId) async {
     return _db.execute((conn) async {
       final result = await conn.execute(
@@ -72,10 +74,7 @@ class AccessLogRepository {
 
   // ── Consulta de visitas activas del día ───────────────────────────────────
 
-  /// Retorna ítems con visitante y estado actual para [date].
-  ///
-  /// Incluye ítems de solicitudes aprobadas cuyo último evento
-  /// NO sea SALIDA_INSTITUCION.
+  /// Visitas del día para el Guardia. Excluye las que ya salieron del instituto.
   Future<List<ActiveVisitDto>> getActiveVisitsForDate(DateTime date) async {
     final dateStr = date.toIso8601String().substring(0, 10);
     return _db.execute((conn) async {
@@ -100,30 +99,17 @@ class AccessLogRepository {
       final dtos = <ActiveVisitDto>[];
       for (final row in result.rows) {
         final map = row.assoc();
-        final item = RequestItemDbModel.fromMap({
-          'item_id': map['item_id'],
-          'request_id': map['request_id'],
-          'visitor_id': map['visitor_id'],
-          'access_token': map['access_token'],
-          'created_at': map['created_at'],
-        });
-        final visitor = VisitorDbModel(
-          visitorId: int.parse(map['visitor_id']!),
-          fullName: map['full_name']!,
-          email: map['email'],
-        );
-
-        final lastLog = await getLatest(item.itemId!);
-        if (lastLog?.eventType == AccessEventType.salidaInstitucion) continue;
-
+        final item = _itemFromMap(map);
+        final logs = await getHistory(item.itemId!);
+        if (logs.lastOrNull?.eventType == AccessEventType.salidaInstitucion) {
+          continue;
+        }
         dtos.add(ActiveVisitDto(
           item: item,
-          visitor: visitor,
-          lastLog: lastLog,
+          visitor: _visitorFromMap(map),
+          logs: logs,
           scheduledTime: map['scheduled_time'],
-          toleranceMinutes: map['tolerance_minutes'] != null
-              ? int.tryParse(map['tolerance_minutes']!)
-              : null,
+          toleranceMinutes: int.tryParse(map['tolerance_minutes'] ?? ''),
           visitType: map['visit_type'] != null
               ? VisitTypeDb.fromDbValue(map['visit_type']!)
               : null,
@@ -134,7 +120,8 @@ class AccessLogRepository {
     });
   }
 
-  /// Ítems del día asociados a un anfitrión específico.
+  /// Todas las visitas del día para un anfitrión (incluye finalizadas para
+  /// mostrar el resumen de seguimiento).
   Future<List<ActiveVisitDto>> getActiveVisitsForHost(
     String emailHost,
     DateTime date,
@@ -162,27 +149,13 @@ class AccessLogRepository {
       final dtos = <ActiveVisitDto>[];
       for (final row in result.rows) {
         final map = row.assoc();
-        final item = RequestItemDbModel.fromMap({
-          'item_id': map['item_id'],
-          'request_id': map['request_id'],
-          'visitor_id': map['visitor_id'],
-          'access_token': map['access_token'],
-          'created_at': map['created_at'],
-        });
-        final visitor = VisitorDbModel(
-          visitorId: int.parse(map['visitor_id']!),
-          fullName: map['full_name']!,
-          email: map['email'],
-        );
-        final lastLog = await getLatest(item.itemId!);
+        final item = _itemFromMap(map);
+        final logs = await getHistory(item.itemId!);
         dtos.add(ActiveVisitDto(
           item: item,
-          visitor: visitor,
-          lastLog: lastLog,
+          visitor: _visitorFromMap(map),
+          logs: logs,
           scheduledTime: map['scheduled_time'],
-          toleranceMinutes: map['tolerance_minutes'] != null
-              ? int.tryParse(map['tolerance_minutes']!)
-              : null,
           visitType: map['visit_type'] != null
               ? VisitTypeDb.fromDbValue(map['visit_type']!)
               : null,
@@ -192,15 +165,77 @@ class AccessLogRepository {
       return dtos;
     });
   }
+
+  /// Seguimiento de visitantes de una solicitud específica.
+  /// Usado por el Autorizador para ver el estado de cada visita aprobada.
+  Future<List<ActiveVisitDto>> getVisitorTrackingForRequest(
+    int requestId,
+  ) async {
+    return _db.execute((conn) async {
+      final result = await conn.execute(
+        '''SELECT
+             ri.item_id, ri.request_id, ri.visitor_id,
+             ri.access_token, ri.created_at,
+             v.full_name, v.email,
+             r.scheduled_time, r.visit_type,
+             b.building_name
+           FROM requests_items ri
+           JOIN requests r ON r.request_id = ri.request_id
+           JOIN visitors v ON v.visitor_id = ri.visitor_id
+           JOIN buildings b ON b.building_id = r.building_id
+           WHERE ri.request_id = :id
+           ORDER BY ri.item_id ASC''',
+        {'id': requestId},
+      );
+
+      final dtos = <ActiveVisitDto>[];
+      for (final row in result.rows) {
+        final map = row.assoc();
+        final item = _itemFromMap(map);
+        final logs = await getHistory(item.itemId!);
+        dtos.add(ActiveVisitDto(
+          item: item,
+          visitor: _visitorFromMap(map),
+          logs: logs,
+          scheduledTime: map['scheduled_time'],
+          visitType: map['visit_type'] != null
+              ? VisitTypeDb.fromDbValue(map['visit_type']!)
+              : null,
+          buildingName: map['building_name'],
+        ));
+      }
+      return dtos;
+    });
+  }
+
+  // ── Helpers privados ──────────────────────────────────────────────────────
+
+  static RequestItemDbModel _itemFromMap(Map<String, String?> map) =>
+      RequestItemDbModel.fromMap({
+        'item_id': map['item_id'],
+        'request_id': map['request_id'],
+        'visitor_id': map['visitor_id'],
+        'access_token': map['access_token'],
+        'created_at': map['created_at'],
+      });
+
+  static VisitorDbModel _visitorFromMap(Map<String, String?> map) =>
+      VisitorDbModel(
+        visitorId: int.parse(map['visitor_id']!),
+        fullName: map['full_name']!,
+        email: map['email'],
+      );
 }
 
-/// DTO que agrupa un ítem con su visitante, su último estado y la hora
-/// programada de la visita para mostrar en los cards del Anfitrión.
+// ── DTO ───────────────────────────────────────────────────────────────────────
+
+/// DTO que agrupa un ítem con su visitante y el historial completo de eventos.
+/// Proporciona timestamps por etapa y getters de alerta (> 30 min).
 class ActiveVisitDto {
   const ActiveVisitDto({
     required this.item,
     required this.visitor,
-    this.lastLog,
+    this.logs = const [],
     this.scheduledTime,
     this.toleranceMinutes,
     this.visitType,
@@ -210,28 +245,53 @@ class ActiveVisitDto {
   final RequestItemDbModel item;
   final VisitorDbModel visitor;
 
-  /// Último evento registrado — null si el visitante aún no ha llegado.
-  final AccessLogDbModel? lastLog;
+  /// Historial cronológico de eventos (ASC). Vacío si el visitante no ha
+  /// llegado aún.
+  final List<AccessLogDbModel> logs;
 
-  /// Hora programada de la visita en formato 'HH:MM:SS' (de requests).
   final String? scheduledTime;
-
-  /// Minutos de tolerancia configurados en la solicitud.
   final int? toleranceMinutes;
-
-  /// Tipo de visita — permite identificar espontáneas en el panel del guardia.
   final VisitTypeDb? visitType;
-
-  /// Nombre del edificio destino (para mostrar en el panel del guardia).
   final String? buildingName;
 
-  /// Evento actual derivado del último log (null = PENDIENTE).
+  // ── Derivados ──────────────────────────────────────────────────────────────
+
+  AccessLogDbModel? get lastLog => logs.isNotEmpty ? logs.last : null;
   AccessEventType? get currentEvent => lastLog?.eventType;
-
-  /// True si la visita fue creada en el momento por el guardia.
   bool get isEspontanea => visitType == VisitTypeDb.espontaneo;
+  bool get isFinished => currentEvent == AccessEventType.salidaInstitucion;
 
-  /// Hora formateada 'HH:MM' para mostrar en UI.
+  // ── Timestamps por etapa ───────────────────────────────────────────────────
+
+  DateTime? get entradaAt => _logAt(AccessEventType.entradaInstitucion);
+  DateTime? get llegadaOficinaAt => _logAt(AccessEventType.llegadaOficina);
+  DateTime? get salidaOficinaAt => _logAt(AccessEventType.salidaOficina);
+  DateTime? get salidaInstitucionAt =>
+      _logAt(AccessEventType.salidaInstitucion);
+
+  DateTime? _logAt(AccessEventType type) =>
+      logs.where((l) => l.eventType == type).firstOrNull?.registeredAt;
+
+  // ── Umbrales de alerta (lógica lista; envío de notificaciones pendiente) ───
+
+  /// True cuando el visitante lleva más de 30 min en el instituto sin llegar
+  /// a la oficina del anfitrión.
+  bool get needsEntradaAlert {
+    final at = entradaAt;
+    if (at == null || llegadaOficinaAt != null) return false;
+    return DateTime.now().difference(at).inMinutes >= 30;
+  }
+
+  /// True cuando el visitante lleva más de 30 min desde que salió de la
+  /// oficina sin registrar salida del instituto.
+  bool get needsSalidaOficinaAlert {
+    final at = salidaOficinaAt;
+    if (at == null || salidaInstitucionAt != null) return false;
+    return DateTime.now().difference(at).inMinutes >= 30;
+  }
+
+  // ── Utilidades de presentación ─────────────────────────────────────────────
+
   String get formattedTime {
     if (scheduledTime == null) return '—';
     return scheduledTime!.length >= 5
@@ -240,8 +300,16 @@ class ActiveVisitDto {
   }
 }
 
-// ── Provider ──────────────────────────────────────────────────────────────────
+// ── Providers ─────────────────────────────────────────────────────────────────
 
 final accessLogRepositoryProvider = Provider<AccessLogRepository>(
   (ref) => AccessLogRepository(ref.watch(databaseServiceProvider)),
 );
+
+/// Provider para cargar el seguimiento de visitantes de una solicitud.
+/// Usado por el Autorizador con carga lazy (FutureProvider.family).
+final visitTrackingProvider =
+    FutureProvider.family<List<ActiveVisitDto>, int>((ref, requestId) async {
+  final repo = ref.read(accessLogRepositoryProvider);
+  return repo.getVisitorTrackingForRequest(requestId);
+});

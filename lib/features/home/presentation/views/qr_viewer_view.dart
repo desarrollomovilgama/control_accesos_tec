@@ -59,6 +59,12 @@ class _QrViewerViewState extends State<QrViewerView> {
   // ── Generación y compartir ────────────────────────────────────────────────
 
   Future<Uint8List> _generateQrBytes(String data) async {
+    const qrSize = 512.0;
+    const tokenFontSize = 15.0;
+    const textTopPad = 14.0;
+    const textBottomPad = 20.0;
+    const totalHeight = qrSize + textTopPad + tokenFontSize + textBottomPad;
+
     final painter = QrPainter(
       data: data,
       version: QrVersions.auto,
@@ -72,10 +78,38 @@ class _QrViewerViewState extends State<QrViewerView> {
         color: Color(0xFF134474),
       ),
     );
-    final byteData = await painter.toImageData(
-      512,
-      format: ui.ImageByteFormat.png,
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // Fondo blanco para todo el lienzo (QR + token).
+    canvas.drawRect(
+      const Rect.fromLTWH(0, 0, qrSize, totalHeight),
+      Paint()..color = Colors.white,
     );
+
+    // QR.
+    painter.paint(canvas, const Size(qrSize, qrSize));
+
+    // Token de acceso como texto debajo del QR.
+    final pb = ui.ParagraphBuilder(
+      ui.ParagraphStyle(
+        fontSize: tokenFontSize,
+        textAlign: TextAlign.center,
+      ),
+    )
+      ..pushStyle(ui.TextStyle(
+        color: const Color(0xFF134474),
+        letterSpacing: 0.6,
+      ))
+      ..addText(data);
+    final paragraph = pb.build()
+      ..layout(const ui.ParagraphConstraints(width: qrSize));
+    canvas.drawParagraph(paragraph, const Offset(0, qrSize + textTopPad));
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(qrSize.toInt(), totalHeight.toInt());
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     return byteData!.buffer.asUint8List();
   }
 
@@ -93,6 +127,7 @@ class _QrViewerViewState extends State<QrViewerView> {
       final shareText =
           'Código de acceso al ITT para ${item.visitorName}'
           '${item.email != null ? ' — ${item.email}' : ''}.\n'
+          'Token: ${item.accessToken}\n'
           'Presenta este QR al Guardia al llegar al instituto.';
 
       await Share.shareXFiles(
@@ -307,6 +342,31 @@ class _QrCard extends StatelessWidget {
             'Muestra este código al llegar al instituto',
             style: AppTextStyles.caption,
             textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: AppSpacing.xs),
+
+          // ── Token de acceso (seleccionable) ───────────────────
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.xs,
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.iceBlue,
+              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+              border: Border.all(color: AppColors.borderGray),
+            ),
+            child: SelectableText(
+              item.accessToken,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 10,
+                letterSpacing: 0.4,
+                color: AppColors.textContrast,
+              ),
+              textAlign: TextAlign.center,
+            ),
           ),
           const SizedBox(height: AppSpacing.blockGap),
 

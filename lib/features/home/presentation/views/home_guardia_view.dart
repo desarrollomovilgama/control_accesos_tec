@@ -25,6 +25,7 @@ import '../../../../core/widgets/primary_button.dart';
 import '../../data/models/access_log_db_model.dart';
 import '../../data/models/building_model.dart';
 import '../../data/repositories/access_log_repository.dart';
+import '../../../../core/services/sam_departamento_service.dart';
 import '../../data/repositories/building_repository.dart';
 import '../viewmodels/escaneo_viewmodel.dart';
 import '../viewmodels/espontaneo_viewmodel.dart';
@@ -156,6 +157,9 @@ class _TabEscaneoQRState extends ConsumerState<_TabEscaneoQR> {
     _scannerController.stop();
     final isExtension = result.action == ScanAction.extensionPendiente;
     final isSalidaSinOficina = result.action == ScanAction.salidaSinOficina;
+    // Capturar el messenger ANTES del gap asíncrono para evitar uso de
+    // BuildContext después de await.
+    final messenger = ScaffoldMessenger.of(context);
     await showModalBottomSheet<void>(
       context: context,
       isDismissible: !isExtension,
@@ -165,10 +169,19 @@ class _TabEscaneoQRState extends ConsumerState<_TabEscaneoQR> {
       ),
       builder: (_) => _ScanResultSheet(result: result),
     );
-    if (mounted) {
-      ref.read(escaneoViewModelProvider.notifier).clearResult();
-      _scannerController.start();
+    if (!mounted) return;
+
+    // Si era una extensión, leer el resultado ANTES de limpiar el estado y
+    // notificar al guardia de la decisión del anfitrión.
+    if (isExtension) {
+      _notificarDecisionExtension(
+        messenger,
+        ref.read(escaneoViewModelProvider).lastScan,
+      );
     }
+
+    ref.read(escaneoViewModelProvider.notifier).clearResult();
+    _scannerController.start();
   }
 
   @override
@@ -596,11 +609,36 @@ class _ScanResultSheet extends ConsumerWidget {
                 ),
               ],
             ] else ...[
+              if (result.visitorName != null) ...[
+                Text(
+                  result.visitorName!,
+                  style: AppTextStyles.subtitle,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: AppSpacing.xs),
+              ],
               Text(
                 result.errorMessage ?? 'Código no válido',
                 style: AppTextStyles.body.copyWith(color: AppColors.textContrast),
                 textAlign: TextAlign.center,
               ),
+              if (result.emailHost != null) ...[
+                const SizedBox(height: AppSpacing.xs),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const FaIcon(AppIcons.email, size: 12, color: AppColors.iconGray),
+                    const SizedBox(width: AppSpacing.xs),
+                    Flexible(
+                      child: Text(
+                        'Anfitrión: ${result.emailHost}',
+                        style: AppTextStyles.caption,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
 
             const SizedBox(height: AppSpacing.blockGap),
@@ -1005,6 +1043,9 @@ class _ModoEspontaneoState extends ConsumerState<_ModoEspontaneo> {
     final vm = ref.watch(espontaneoViewModelProvider);
     final notifier = ref.read(espontaneoViewModelProvider.notifier);
     final buildingsCatalog = ref.watch(buildingCatalogProvider);
+    // Mapa edificio→departamento del catálogo SAM (endpoint público).
+    // Se usa solo para enriquecer el label del dropdown; fallo grácil = mapa vacío.
+    final deptMap = ref.watch(edificioDeptCacheProvider).valueOrNull ?? {};
 
     // Si ya se creó el token, mostrar pantalla de confirmación.
     if (vm.hasToken) {
@@ -1092,17 +1133,21 @@ class _ModoEspontaneoState extends ConsumerState<_ModoEspontaneo> {
                       style: AppTextStyles.fieldHint,
                     ),
                     items: buildings
-                        .map(
-                          (b) => DropdownMenuItem(
+                        .map((b) {
+                          final dept = deptMap[b.buildingName];
+                          return DropdownMenuItem(
                             value: b,
                             child: Text(
-                              b.buildingName,
+                              dept != null
+                                  ? 'Edif. ${b.buildingName} — $dept'
+                                  : 'Edificio ${b.buildingName}',
                               style: AppTextStyles.body.copyWith(
                                 color: AppColors.textContrast,
                               ),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                        )
+                          );
+                        })
                         .toList(),
                     onChanged: vm.isSubmitting
                         ? null
@@ -1425,29 +1470,6 @@ class _TabVisitasActivasState extends ConsumerState<_TabVisitasActivas> {
     final vm = ref.watch(guardiaVisitasViewModelProvider);
     final notifier = ref.read(guardiaVisitasViewModelProvider.notifier);
 
-    // ── Reaccionar a errores de horario ──────────────────────────────────
-    ref.listen<GuardiaVisitasState>(guardiaVisitasViewModelProvider,
-        (prev, next) {
-      if (next.timeError != null && prev?.timeError == null) {
-        final err = next.timeError!;
-        notifier.clearTimeError();
-
-        if (err.canExtend) {
-          _showVencidaDialog(context, err);
-        } else {
-          // Demasiado temprano — solo informar.
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(err.message),
-              backgroundColor: AppColors.warning,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 4),
-            ),
-          );
-        }
-      }
-    });
-
     if (vm.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -1459,17 +1481,9 @@ class _TabVisitasActivasState extends ConsumerState<_TabVisitasActivas> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const FaIcon(
-                AppIcons.circleXmark,
-                size: 40,
-                color: AppColors.error,
-              ),
+              const FaIcon(AppIcons.circleXmark, size: 40, color: AppColors.error),
               const SizedBox(height: AppSpacing.md),
-              Text(
-                vm.errorMsg,
-                style: AppTextStyles.body,
-                textAlign: TextAlign.center,
-              ),
+              Text(vm.errorMsg, style: AppTextStyles.body, textAlign: TextAlign.center),
               const SizedBox(height: AppSpacing.blockGap),
               ElevatedButton.icon(
                 onPressed: notifier.refresh,
@@ -1488,10 +1502,7 @@ class _TabVisitasActivasState extends ConsumerState<_TabVisitasActivas> {
         child: ListView(
           children: const [
             SizedBox(height: 200),
-            EmptyState(
-              icon: AppIcons.listVisitas,
-              label: 'Sin visitas registradas hoy',
-            ),
+            EmptyState(icon: AppIcons.listVisitas, label: 'Sin visitas registradas hoy'),
           ],
         ),
       );
@@ -1502,323 +1513,123 @@ class _TabVisitasActivasState extends ConsumerState<_TabVisitasActivas> {
       child: ListView.separated(
         padding: const EdgeInsets.all(AppSpacing.screenH),
         itemCount: vm.visitas.length + 1,
-        separatorBuilder: (_, _) =>
-            const SizedBox(height: AppSpacing.listItemGap),
+        separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.listItemGap),
         itemBuilder: (ctx, i) {
           if (i == 0) {
             return Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.sm),
               child: Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      'Visitas del día',
-                      style: AppTextStyles.subtitle,
-                    ),
-                  ),
+                  Expanded(child: Text('Visitas del día', style: AppTextStyles.subtitle)),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.sm,
-                      vertical: 2,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 2),
                     decoration: BoxDecoration(
                       color: AppColors.primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
                       '${vm.visitas.length}',
-                      style: AppTextStyles.captionBold.copyWith(
-                        color: AppColors.primary,
-                      ),
+                      style: AppTextStyles.captionBold.copyWith(color: AppColors.primary),
                     ),
                   ),
                 ],
               ),
             );
           }
-
-          final dto = vm.visitas[i - 1];
-          final itemId = dto.item.itemId!;
-          final isProcessing = vm.isProcessing(itemId);
-          final event = dto.currentEvent;
-
-          return _VisitaGuardiaCard(
-            dto: dto,
-            isProcessing: isProcessing,
-            // Entrada: solo si el visitante aún no ha registrado ningún evento.
-            onEntrada: event == null
-                ? () => notifier.registrarEntrada(itemId)
-                : null,
-            // Salida del instituto: solo cuando el anfitrión confirmó que el
-            // visitante ya salió de su oficina (salidaOficina).
-            // Si el visitante está en entradaInstitucion, llegadaOficina o
-            // aún en enEspera, el guardia no puede registrar la salida aún.
-            onSalida: event == AccessEventType.salidaOficina
-                ? () => notifier.registrarSalida(itemId)
-                : null,
-          );
+          return _VisitaGuardiaCard(dto: vm.visitas[i - 1]);
         },
       ),
     );
   }
-
-  // ── Diálogo: visita vencida ─────────────────────────────────────────────
-
-  void _showVencidaDialog(BuildContext ctx, TimeError err) {
-    final dto = err.dto;
-    showDialog<void>(
-      context: ctx,
-      builder: (dCtx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
-        ),
-        title: Row(
-          children: [
-            const FaIcon(
-              FontAwesomeIcons.clockRotateLeft,
-              size: 18,
-              color: AppColors.warning,
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            const Text('Visita vencida'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(dto.visitor.fullName, style: AppTextStyles.bodyBold),
-            const SizedBox(height: AppSpacing.xs),
-            Row(
-              children: [
-                const FaIcon(
-                  AppIcons.clock,
-                  size: 12,
-                  color: AppColors.iconGray,
-                ),
-                const SizedBox(width: AppSpacing.xs),
-                Text(
-                  'Programada: ${dto.formattedTime}'
-                  '${dto.toleranceMinutes != null ? ' ±${dto.toleranceMinutes}min' : ''}',
-                  style: AppTextStyles.caption,
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              'El tiempo de tolerancia ha expirado. '
-              'Puedes notificar al anfitrión para que autorice la entrada.',
-              style: AppTextStyles.caption,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dCtx),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.warning,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-              ),
-            ),
-            icon: const FaIcon(FontAwesomeIcons.bell, size: 13),
-            label: const Text('Notificar al anfitrión'),
-            onPressed: () {
-              Navigator.pop(dCtx);
-              _solicitarExtension(ctx, dto);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Inicia el flujo de extensión y muestra el sheet de espera.
-  void _solicitarExtension(BuildContext ctx, ActiveVisitDto dto) {
-    // Disparar el flujo en el escaneo ViewModel (reutiliza countdown + polling).
-    ref.read(escaneoViewModelProvider.notifier).solicitarExtension(
-          requestId: dto.item.requestId,
-          itemId: dto.item.itemId!,
-          visitorName: dto.visitor.fullName,
-          accessToken: dto.item.accessToken,
-        );
-
-    // Mostrar el mismo BottomSheet de extensión que usa el tab QR.
-    showModalBottomSheet<void>(
-      context: ctx,
-      isDismissible: false,
-      enableDrag: false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _ScanResultSheet(
-        result: ScanResult.extensionPendiente(
-          visitorName: dto.visitor.fullName,
-          requestId: dto.item.requestId,
-          itemId: dto.item.itemId!,
-          secondsRemaining: 60,
-        ),
-      ),
-    ).then((_) {
-      // Cuando el sheet se cierra, refrescar la lista de visitas.
-      ref.read(escaneoViewModelProvider.notifier).clearResult();
-      ref.read(guardiaVisitasViewModelProvider.notifier).refresh();
-    });
-  }
 }
 
-/// Tarjeta de visita del día para el Guardia con acciones de entrada/salida.
+/// Tarjeta de visita del día para el Guardia — solo lectura.
 class _VisitaGuardiaCard extends StatelessWidget {
-  const _VisitaGuardiaCard({
-    required this.dto,
-    this.isProcessing = false,
-    this.onEntrada,
-    this.onSalida,
-  });
+  const _VisitaGuardiaCard({required this.dto});
 
   final ActiveVisitDto dto;
-  final bool isProcessing;
-  final VoidCallback? onEntrada;
-  final VoidCallback? onSalida;
 
   @override
   Widget build(BuildContext context) {
     final event = dto.currentEvent;
     final Color stateColor = _eventColor(event);
     final String stateLabel = _eventLabel(event);
-    final bool showActions = onEntrada != null || onSalida != null;
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.cardPadding),
       decoration: BoxDecoration(
         color: AppColors.appBackground,
         borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
-        border: Border.all(
-          color: stateColor.withValues(alpha: 0.4),
-          width: 1.5,
-        ),
+        border: Border.all(color: stateColor.withValues(alpha: 0.4), width: 1.5),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: stateColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                ),
-                child: Center(
-                  child: FaIcon(AppIcons.person, size: 20, color: stateColor),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(dto.visitor.fullName, style: AppTextStyles.bodyBold),
-                    if (dto.visitor.email != null)
-                      Text(dto.visitor.email!, style: AppTextStyles.caption),
-                    Row(
-                      children: [
-                        const FaIcon(
-                          AppIcons.building,
-                          size: 10,
-                          color: AppColors.iconGray,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          dto.buildingName ?? '—',
-                          style: AppTextStyles.caption,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: stateColor.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      stateLabel,
-                      style: AppTextStyles.caption.copyWith(
-                        color: stateColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  if (dto.isEspontanea) ...[
-                    const SizedBox(height: 3),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.info.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        'ESPONTÁNEA',
-                        style: AppTextStyles.caption.copyWith(
-                          color: AppColors.info,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ],
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: stateColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+            ),
+            child: Center(
+              child: FaIcon(AppIcons.person, size: 20, color: stateColor),
+            ),
           ),
-
-          if (showActions) ...[
-            const SizedBox(height: AppSpacing.sm),
-            const Divider(height: 1),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (onEntrada != null)
-                  Expanded(
-                    child: _BtnVisita(
-                      label: 'Entrada',
-                      icon: AppIcons.doorEnter,
-                      color: AppColors.success,
-                      isLoading: isProcessing,
-                      onTap: isProcessing ? null : onEntrada,
-                    ),
-                  ),
-                if (onEntrada != null && onSalida != null)
-                  const SizedBox(width: AppSpacing.sm),
-                if (onSalida != null)
-                  Expanded(
-                    child: _BtnVisita(
-                      label: 'Salida',
-                      icon: AppIcons.doorExit,
-                      color: AppColors.error,
-                      isLoading: isProcessing,
-                      onTap: isProcessing ? null : onSalida,
-                    ),
-                  ),
+                Text(dto.visitor.fullName, style: AppTextStyles.bodyBold),
+                if (dto.visitor.email != null)
+                  Text(dto.visitor.email!, style: AppTextStyles.caption),
+                Row(
+                  children: [
+                    const FaIcon(AppIcons.building, size: 10, color: AppColors.iconGray),
+                    const SizedBox(width: 4),
+                    Text(dto.buildingName ?? '—', style: AppTextStyles.caption),
+                  ],
+                ),
               ],
             ),
-          ],
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: stateColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  stateLabel,
+                  style: AppTextStyles.caption.copyWith(
+                    color: stateColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (dto.isEspontanea) ...[
+                const SizedBox(height: 3),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: AppColors.info.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'ESPONTÁNEA',
+                    style: AppTextStyles.caption.copyWith(
+                      color: AppColors.info,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ],
       ),
     );
@@ -1841,59 +1652,30 @@ class _VisitaGuardiaCard extends StatelessWidget {
   };
 }
 
-/// Botón de acción compacto para la tarjeta de visita del guardia.
-class _BtnVisita extends StatelessWidget {
-  const _BtnVisita({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-    this.isLoading = false,
-  });
+// ── Helpers de archivo ────────────────────────────────────────────────────────
 
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback? onTap;
-  final bool isLoading;
+/// Muestra un SnackBar con la decisión del anfitrión sobre la extensión.
+/// Solo reacciona a aprobación/rechazo del anfitrión; ignora cancelaciones
+/// propias del guardia (timeout, botón Cancelar).
+void _notificarDecisionExtension(
+  ScaffoldMessengerState messenger,
+  ScanResult? finalScan,
+) {
+  if (finalScan == null) return;
+  final approved = finalScan.isSuccess && finalScan.action == ScanAction.entrada;
+  final rejected = !finalScan.isSuccess &&
+      finalScan.errorMessage == 'Acceso denegado por el anfitrión';
+  if (!approved && !rejected) return;
 
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          vertical: AppSpacing.sm,
-          horizontal: AppSpacing.sm,
-        ),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
-        ),
-        child: isLoading
-            ? Center(
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: color,
-                  ),
-                ),
-              )
-            : Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  FaIcon(icon, size: 12, color: color),
-                  const SizedBox(width: AppSpacing.xs),
-                  Text(
-                    label,
-                    style: AppTextStyles.captionBold.copyWith(color: color),
-                  ),
-                ],
-              ),
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(
+        approved
+            ? 'Acceso autorizado — ${finalScan.visitorName ?? '—'}'
+            : 'Acceso rechazado por el anfitrión',
       ),
-    );
-  }
+      backgroundColor: approved ? AppColors.success : AppColors.error,
+      duration: const Duration(seconds: 5),
+    ),
+  );
 }

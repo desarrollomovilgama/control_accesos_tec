@@ -1,12 +1,12 @@
 /// @file: anfitrion_visitantes_viewmodel.dart
 /// @project: Control de Accesos - GAMA
 /// @description: ViewModel del tab "Mis Visitantes" del Anfitrión.
-///   Carga los visitantes activos del día para el anfitrión autenticado
-///   y registra los eventos de llegada/salida de su oficina en access_logs.
+///   Carga los visitantes activos del día, registra eventos de llegada/salida
+///   de oficina y emite alertas de tiempo excesivo entre estados de visita.
 ///   Referencia: RF-13 del Proyecto C — Control de Accesos.
 /// @author: Luis Antonio Tarango Regis
-/// @version: 1.0.0
-/// @last_update: 2026-05-26
+/// @version: 2.0.0
+/// @last_update: 2026-05-31
 
 library;
 
@@ -20,6 +20,34 @@ import '../../data/models/access_log_db_model.dart';
 import '../../data/repositories/access_log_repository.dart';
 import '../../data/repositories/request_repository.dart';
 
+// ── Alertas de tiempo ─────────────────────────────────────────────────────────
+
+/// Tipo de alerta de tiempo transcurrido entre estados de visita.
+enum VisitAlertType {
+  /// Visitante lleva > 30 min en el instituto sin llegar a la oficina.
+  entradaTardanza,
+
+  /// Visitante lleva > 30 min desde que salió de la oficina sin salir del ITT.
+  salidaOficinaTardanza,
+}
+
+/// Alerta de tiempo excesivo asociada a un visitante concreto.
+class VisitAlert {
+  const VisitAlert({required this.dto, required this.type});
+
+  final ActiveVisitDto dto;
+  final VisitAlertType type;
+
+  String get visitorName => dto.visitor.fullName;
+
+  String get message => switch (type) {
+    VisitAlertType.entradaTardanza =>
+      '$visitorName lleva más de 30 min en el instituto sin llegar a tu oficina.',
+    VisitAlertType.salidaOficinaTardanza =>
+      '$visitorName lleva más de 30 min saliendo del instituto.',
+  };
+}
+
 // ── Estado ────────────────────────────────────────────────────────────────────
 
 @immutable
@@ -27,6 +55,7 @@ class AnfitrionVisitantesState {
   const AnfitrionVisitantesState({
     this.visitantes = const [],
     this.pendingExtensions = const [],
+    this.pendingAlerts = const [],
     this.isLoading = false,
     this.errorMsg = '',
     this.processingItemId,
@@ -34,15 +63,15 @@ class AnfitrionVisitantesState {
   });
 
   final List<ActiveVisitDto> visitantes;
-
-  /// Solicitudes de extensión pendientes para este anfitrión.
   final List<ExtensionDto> pendingExtensions;
+
+  /// Alertas de tiempo que acaban de dispararse en este ciclo de polling.
+  /// La vista consume esta lista y se vacía en el siguiente poll.
+  final List<VisitAlert> pendingAlerts;
 
   final bool isLoading;
   final String errorMsg;
   final int? processingItemId;
-
-  /// requestId de la extensión que se está procesando.
   final int? processingExtensionId;
 
   bool get hasError => errorMsg.isNotEmpty;
@@ -55,6 +84,7 @@ class AnfitrionVisitantesState {
   AnfitrionVisitantesState copyWith({
     List<ActiveVisitDto>? visitantes,
     List<ExtensionDto>? pendingExtensions,
+    List<VisitAlert>? pendingAlerts,
     bool? isLoading,
     String? errorMsg,
     int? processingItemId,
@@ -65,6 +95,7 @@ class AnfitrionVisitantesState {
     return AnfitrionVisitantesState(
       visitantes: visitantes ?? this.visitantes,
       pendingExtensions: pendingExtensions ?? this.pendingExtensions,
+      pendingAlerts: pendingAlerts ?? this.pendingAlerts,
       isLoading: isLoading ?? this.isLoading,
       errorMsg: errorMsg ?? this.errorMsg,
       processingItemId:
@@ -78,19 +109,22 @@ class AnfitrionVisitantesState {
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
-/// ViewModel del tab "Mis Visitantes" del Anfitrión — GAMA MPF v1.0.
 class AnfitrionVisitantesViewModel
     extends Notifier<AnfitrionVisitantesState> {
   late final AccessLogRepository _logRepo;
   late final RequestRepository _requestRepo;
   Timer? _extensionPollTimer;
 
+  /// Sets de itemIds para los que ya se emitió la alerta correspondiente.
+  /// Evitan repetir la misma alerta en cada ciclo de polling.
+  final Set<int> _alertedEntradaIds = {};
+  final Set<int> _alertedSalidaIds = {};
+
   @override
   AnfitrionVisitantesState build() {
     _logRepo = ref.read(accessLogRepositoryProvider);
     _requestRepo = ref.read(requestRepositoryProvider);
     Future.microtask(_load);
-    // Polling cada 10 s: actualiza visitantes Y extensiones pendientes.
     _extensionPollTimer = Timer.periodic(
       const Duration(seconds: 10),
       (_) async {
@@ -131,7 +165,8 @@ class AnfitrionVisitantesViewModel
     }
   }
 
-  /// Recarga silenciosa (sin spinner) usada por el timer de polling.
+  /// Recarga silenciosa usada por el timer de polling.
+  /// También evalúa alertas de tiempo y las emite si son nuevas.
   Future<void> _loadSilent() async {
     final session = ref.read(sessionProvider);
     if (session == null) return;
@@ -140,23 +175,48 @@ class AnfitrionVisitantesViewModel
         session.correo,
         DateTime.now(),
       );
-      state = state.copyWith(visitantes: data);
+
+      final newAlerts = _detectAlerts(data);
+
+      state = state.copyWith(
+        visitantes: data,
+        // Siempre actualiza pendingAlerts: la vista reacciona cuando es
+        // no vacío; en el siguiente poll vuelve a [] si no hay nuevas.
+        pendingAlerts: newAlerts,
+      );
     } catch (_) {}
+  }
+
+  // ── Detección de alertas de tiempo ────────────────────────────────────────
+
+  List<VisitAlert> _detectAlerts(List<ActiveVisitDto> visitas) {
+    final alerts = <VisitAlert>[];
+    for (final dto in visitas) {
+      final id = dto.item.itemId;
+      if (id == null) continue;
+
+      if (dto.needsEntradaAlert && !_alertedEntradaIds.contains(id)) {
+        _alertedEntradaIds.add(id);
+        alerts.add(VisitAlert(dto: dto, type: VisitAlertType.entradaTardanza));
+      }
+      if (dto.needsSalidaOficinaAlert && !_alertedSalidaIds.contains(id)) {
+        _alertedSalidaIds.add(id);
+        alerts.add(VisitAlert(dto: dto, type: VisitAlertType.salidaOficinaTardanza));
+      }
+    }
+    return alerts;
   }
 
   // ── Acciones ──────────────────────────────────────────────────────────────
 
-  /// Registra que el visitante llegó a la oficina del Anfitrión.
   Future<void> confirmarLlegadaOficina(int itemId) async {
     await _registerEvent(itemId, AccessEventType.llegadaOficina);
   }
 
-  /// Registra que el visitante salió de la oficina del Anfitrión.
   Future<void> confirmarSalidaOficina(int itemId) async {
     await _registerEvent(itemId, AccessEventType.salidaOficina);
   }
 
-  /// Recarga la lista manualmente (pull-to-refresh).
   Future<void> refresh() => _load();
 
   // ── Extensiones de llegada tardía ─────────────────────────────────────────
@@ -165,21 +225,15 @@ class AnfitrionVisitantesViewModel
     final session = ref.read(sessionProvider);
     if (session == null) return;
     try {
-      final extensions = await _requestRepo.findPendingExtensions(
-        session.correo,
-      );
+      final extensions = await _requestRepo.findPendingExtensions(session.correo);
       state = state.copyWith(pendingExtensions: extensions);
     } catch (_) {}
   }
 
-  /// Aprueba la extensión — actualiza tiempos en la solicitud.
   Future<void> aprobarExtension(int requestId) async {
     state = state.copyWith(processingExtensionId: requestId);
     try {
-      await _requestRepo.resolveExtension(
-        requestId: requestId,
-        approved: true,
-      );
+      await _requestRepo.resolveExtension(requestId: requestId, approved: true);
       await _pollExtensions();
     } catch (e) {
       debugPrint('[AnfitrionVisitantesVM] Error aprobando extensión: $e');
@@ -188,14 +242,10 @@ class AnfitrionVisitantesViewModel
     }
   }
 
-  /// Rechaza la extensión — el QR sigue vencido para el guardia.
   Future<void> rechazarExtension(int requestId) async {
     state = state.copyWith(processingExtensionId: requestId);
     try {
-      await _requestRepo.resolveExtension(
-        requestId: requestId,
-        approved: false,
-      );
+      await _requestRepo.resolveExtension(requestId: requestId, approved: false);
       await _pollExtensions();
     } catch (e) {
       debugPrint('[AnfitrionVisitantesVM] Error rechazando extensión: $e');
@@ -209,9 +259,7 @@ class AnfitrionVisitantesViewModel
   Future<void> _registerEvent(int itemId, AccessEventType event) async {
     state = state.copyWith(processingItemId: itemId, errorMsg: '');
     try {
-      await _logRepo.create(
-        AccessLogDbModel(itemId: itemId, eventType: event),
-      );
+      await _logRepo.create(AccessLogDbModel(itemId: itemId, eventType: event));
       await _load();
     } catch (e) {
       debugPrint('[AnfitrionVisitantesVM] Error registrando evento: $e');

@@ -62,7 +62,7 @@ class RequestRepository {
       final result = await conn.execute(
         '''SELECT * FROM requests
            WHERE Email_Host = :email
-           ORDER BY scheduled_date DESC, scheduled_time DESC''',
+           ORDER BY scheduled_date ASC, scheduled_time ASC''',
         {'email': emailHost},
       );
       return result.rows
@@ -96,7 +96,7 @@ class RequestRepository {
       final result = await conn.execute(
         '''SELECT * FROM requests
            WHERE autorizador_id = :id AND status <> 'PENDIENTE'
-           ORDER BY scheduled_date DESC, scheduled_time DESC''',
+           ORDER BY scheduled_date ASC, scheduled_time ASC''',
         {'id': autorizadorId},
       );
       return result.rows
@@ -132,12 +132,12 @@ class RequestRepository {
         '$_joinSelect'
         'WHERE r.autorizador_id = :id '
         '  AND r.status = \'PENDIENTE\' '
-        '  AND r.scheduled_date >= CURDATE() '
+        '  AND r.scheduled_date >= :today '
         'GROUP BY r.request_id, r.Email_Host, r.status, r.visit_type, '
         '  r.scheduled_date, r.scheduled_time, r.tolerance_minutes, '
         '  r.group_name, b.building_name '
         'ORDER BY r.scheduled_date ASC, r.scheduled_time ASC',
-        {'id': autorizadorId},
+        {'id': autorizadorId, 'today': _dateStr(DateTime.now())},
       );
       debugPrint('[RequestRepo] findPendingWithDetails → ${result.rows.length} filas');
       return result.rows
@@ -156,12 +156,12 @@ class RequestRepository {
         '$_joinSelect'
         'WHERE r.autorizador_id = :id '
         '  AND r.status IN (\'APROBADA\',\'RECHAZADA\') '
-        '  AND r.scheduled_date >= CURDATE() '
+        '  AND r.scheduled_date >= :today '
         'GROUP BY r.request_id, r.Email_Host, r.status, r.visit_type, '
         '  r.scheduled_date, r.scheduled_time, r.tolerance_minutes, '
         '  r.group_name, b.building_name '
-        'ORDER BY r.scheduled_date DESC, r.scheduled_time DESC',
-        {'id': autorizadorId},
+        'ORDER BY r.scheduled_date ASC, r.scheduled_time ASC',
+        {'id': autorizadorId, 'today': _dateStr(DateTime.now())},
       );
       debugPrint('[RequestRepo] findHistoryWithDetails → ${result.rows.length} filas');
       return result.rows
@@ -182,7 +182,7 @@ class RequestRepository {
         'GROUP BY r.request_id, r.Email_Host, r.status, r.visit_type, '
         '  r.scheduled_date, r.scheduled_time, r.tolerance_minutes, '
         '  r.group_name, b.building_name '
-        'ORDER BY r.scheduled_date DESC, r.scheduled_time DESC',
+        'ORDER BY r.scheduled_date ASC, r.scheduled_time ASC',
         {'email': emailHost},
       );
       debugPrint('[RequestRepo] findByHostWithDetails → ${result.rows.length} filas');
@@ -211,7 +211,7 @@ class RequestRepository {
         '$_joinSelect'
         "WHERE r.Email_Host = :email "
         "  AND r.status IN ('PENDIENTE', 'APROBADA') "
-        '  AND r.scheduled_date >= CURDATE() '
+        '  AND r.scheduled_date >= :today '
         '  AND NOT EXISTS ( '
         '    SELECT 1 FROM requests_items ri2 '
         '    JOIN access_logs al ON al.item_id = ri2.item_id '
@@ -221,8 +221,8 @@ class RequestRepository {
         'GROUP BY r.request_id, r.Email_Host, r.status, r.visit_type, '
         '  r.scheduled_date, r.scheduled_time, r.tolerance_minutes, '
         '  r.group_name, b.building_name '
-        'ORDER BY r.scheduled_date DESC, r.scheduled_time DESC',
-        {'email': emailHost},
+        'ORDER BY r.scheduled_date ASC, r.scheduled_time ASC',
+        {'email': emailHost, 'today': _dateStr(DateTime.now())},
       );
       debugPrint('[RequestRepo] findSolicitudesAnfitrion → ${result.rows.length} filas');
       return result.rows
@@ -237,23 +237,31 @@ class RequestRepository {
   ///   • Fechas anteriores a hoy.
   ///   • Hoy, si `scheduled_time + tolerance_minutes` ya pasó.
   ///
+  /// Usa la hora LOCAL del dispositivo (no CURTIME/CURDATE de MySQL) para
+  /// evitar desfase cuando el servidor Railway opera en UTC.
+  ///
   /// Retorna el número de filas afectadas.
   /// Idempotente: se puede llamar en cada ciclo de poll sin efectos secundarios.
   Future<int> autoRejectExpired() async {
     return _db.execute((conn) async {
+      final now = DateTime.now();
+      final today = _dateStr(now);
+      final nowTime = _timeStr(now);
+
       final result = await conn.execute(
         '''UPDATE requests
            SET status = 'RECHAZADA'
            WHERE status = 'PENDIENTE'
              AND (
-               scheduled_date < CURDATE()
+               scheduled_date < :today
                OR (
-                 scheduled_date = CURDATE()
+                 scheduled_date = :today
                  AND ADDTIME(scheduled_time,
                        SEC_TO_TIME(IFNULL(tolerance_minutes, 0) * 60)
-                     ) < CURTIME()
+                     ) < :now_time
                )
              )''',
+        {'today': today, 'now_time': nowTime},
       );
       final affected = result.affectedRows.toInt();
       if (affected > 0) {
@@ -269,11 +277,13 @@ class RequestRepository {
   /// Idempotente.
   Future<int> autoRejectAllPending() async {
     return _db.execute((conn) async {
+      final today = _dateStr(DateTime.now());
       final result = await conn.execute(
         '''UPDATE requests
            SET status = 'RECHAZADA'
            WHERE status = 'PENDIENTE'
-             AND scheduled_date = CURDATE()''',
+             AND scheduled_date = :today''',
+        {'today': today},
       );
       final affected = result.affectedRows.toInt();
       if (affected > 0) {
@@ -363,6 +373,19 @@ class RequestRepository {
       return RequestDbModel.fromMap(result.rows.first.assoc());
     });
   }
+
+  // ── Helpers de fecha/hora local ───────────────────────────────────────────
+
+  /// Fecha local del dispositivo como 'YYYY-MM-DD'.
+  /// Evita usar CURDATE() de MySQL que opera en UTC en Railway.
+  static String _dateStr(DateTime dt) =>
+      '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+
+  /// Hora local del dispositivo como 'HH:MM:SS'.
+  static String _timeStr(DateTime dt) =>
+      '${dt.hour.toString().padLeft(2, '0')}:'
+      '${dt.minute.toString().padLeft(2, '0')}:'
+      '${dt.second.toString().padLeft(2, '0')}';
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────

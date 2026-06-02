@@ -120,6 +120,7 @@ class ScanResult {
     required int itemId,
     required String accessToken,
     required String message,
+    String? emailHost,
   }) =>
       ScanResult(
         isSuccess: false,
@@ -130,6 +131,7 @@ class ScanResult {
         accessToken: accessToken,
         errorMessage: message,
         canExtend: true,
+        emailHost: emailHost,
       );
 
   factory ScanResult.extensionPendiente({
@@ -228,15 +230,30 @@ class EscaneoViewModel extends Notifier<EscaneoState> {
         if (diff < -tol || diff > tol) {
           final hh = (schedMin ~/ 60).toString().padLeft(2, '0');
           final mm = (schedMin % 60).toString().padLeft(2, '0');
-          state = EscaneoState(
-            lastScan: ScanResult.fueraDeHorario(
-              visitorName: details.visitorName,
-              requestId: details.requestId,
-              itemId: details.itemId,
-              accessToken: details.accessToken,
-              message: 'Fuera del horario permitido\n$hh:$mm ±${tol}min',
-            ),
-          );
+
+          // "Notificar al anfitrión" solo si el visitante llega TARDE (diff > tol)
+          // y la fecha programada corresponde a HOY. Si no hay fecha registrada,
+          // o es un día distinto, o llega antes de tiempo → error simple sin extensión.
+          final d = details.scheduledDate;
+          final isScheduledToday = d != null &&
+              d.year == now.year &&
+              d.month == now.month &&
+              d.day == now.day;
+
+          if (isScheduledToday && diff > tol) {
+            state = EscaneoState(
+              lastScan: ScanResult.fueraDeHorario(
+                visitorName: details.visitorName,
+                requestId: details.requestId,
+                itemId: details.itemId,
+                accessToken: details.accessToken,
+                message: 'Fuera del horario permitido\n$hh:$mm ±${tol}min',
+                emailHost: details.emailHost,
+              ),
+            );
+          } else {
+            _setError('Fuera del horario permitido\n$hh:$mm ±${tol}min');
+          }
           return;
         }
       }

@@ -33,14 +33,39 @@ class VisitorRepository {
 
   /// Busca un visitante por correo o lo crea si no existe.
   ///
-  /// Retorna el [VisitorDbModel] con su `visitor_id` asignado.
+  /// Con [updateNameIfDifferent] = true, si el visitante ya existe pero con
+  /// un nombre distinto al recibido, actualiza el nombre en la BD antes de
+  /// retornar. Esto refleja la decisión que el usuario tomó en el formulario.
   Future<VisitorDbModel> findOrCreate({
     required String fullName,
     required String email,
+    bool updateNameIfDifferent = false,
   }) async {
     final existing = await findByEmail(email);
-    if (existing != null) return existing;
+    if (existing != null) {
+      if (updateNameIfDifferent &&
+          fullName.isNotEmpty &&
+          existing.fullName != fullName) {
+        await updateName(existing.visitorId!, fullName);
+        return VisitorDbModel(
+          visitorId: existing.visitorId,
+          fullName: fullName,
+          email: email,
+        );
+      }
+      return existing;
+    }
     return create(VisitorDbModel(fullName: fullName, email: email));
+  }
+
+  /// Actualiza el nombre de un visitante existente.
+  Future<void> updateName(int visitorId, String fullName) async {
+    await _db.execute((conn) async {
+      await conn.execute(
+        'UPDATE visitors SET full_name = :name WHERE visitor_id = :id',
+        {'name': fullName, 'id': visitorId},
+      );
+    });
   }
 
   /// Inserta un nuevo visitante y retorna el modelo con su ID asignado.

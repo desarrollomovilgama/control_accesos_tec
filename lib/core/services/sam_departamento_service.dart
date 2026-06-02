@@ -182,10 +182,54 @@ class SamDepartamentoService {
     }
     return result;
   }
+
+  // ── Endpoint público de catálogos ─────────────────────────────────────────
+
+  /// Obtiene el mapa [edificio → nombreDepartamento] desde el endpoint público
+  /// `GET /app/empleado.do?accion=catalogos` de SAM.
+  ///
+  /// No requiere sesión. Retorna mapa vacío si el endpoint falla.
+  Future<Map<String, String>> fetchEdificioDepartamentoMap() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/app/empleado.do',
+        queryParameters: {'accion': 'catalogos'},
+      );
+      final data = response.data;
+      if (data == null || data['status'] != '0') return {};
+
+      final departamentos = data['departamentos'] as List<dynamic>? ?? [];
+      final result = <String, String>{};
+      for (final dep in departamentos) {
+        final edificio = dep['edificio'] as String?;
+        final nombre = dep['nombre'] as String?;
+        if (edificio != null &&
+            nombre != null &&
+            edificio.isNotEmpty &&
+            nombre.isNotEmpty) {
+          result[edificio] = nombre;
+        }
+      }
+      debugPrint('[SAM Catalogo] Mapa edificio→depto: $result');
+      return result;
+    } catch (e) {
+      debugPrint('[SAM Catalogo] Error obteniendo catálogo: $e');
+      return {};
+    }
+  }
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 final samDepartamentoServiceProvider = Provider<SamDepartamentoService>((ref) {
   return SamDepartamentoService(ref.watch(httpServiceProvider));
+});
+
+/// Mapa en caché de código de edificio → nombre de departamento SAM.
+/// Se carga una vez desde el endpoint público; no requiere autenticación.
+/// Fallo grácil: retorna mapa vacío sin bloquear la UI.
+final edificioDeptCacheProvider =
+    FutureProvider<Map<String, String>>((ref) async {
+  final service = ref.read(samDepartamentoServiceProvider);
+  return service.fetchEdificioDepartamentoMap();
 });

@@ -11,6 +11,8 @@
 
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -26,7 +28,9 @@ import '../../../../core/widgets/primary_button.dart';
 import '../../../../core/utils/logout.dart';
 import '../../data/models/request_db_model.dart';
 import '../../data/models/request_summary_dto.dart';
+import '../../data/repositories/access_log_repository.dart';
 import '../../data/repositories/request_item_repository.dart';
+import '../../data/repositories/visitor_repository.dart';
 import '../../model/visitante_model.dart';
 import '../../../auth/data/models/sam_response_model.dart';
 import '../../../auth/presentation/providers/session_provider.dart';
@@ -109,7 +113,6 @@ class _HomeAnfitrionViewState extends ConsumerState<HomeAnfitrionView> {
   @override
   void initState() {
     super.initState();
-    // Recargar siempre al montar: garantiza datos frescos tras login/logout.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         ref.read(anfitrionSolicitudesViewModelProvider.notifier).refresh();
@@ -120,11 +123,94 @@ class _HomeAnfitrionViewState extends ConsumerState<HomeAnfitrionView> {
 
   @override
   Widget build(BuildContext context) {
+    final hasExtensions = ref.watch(
+      anfitrionVisitantesViewModelProvider
+          .select((s) => s.hasPendingExtensions),
+    );
+
+    // Cuando llega una nueva solicitud de extensión: navegar a "Mis Visitantes"
+    // y mostrar un SnackBar de alerta para que el anfitrión no pierda los 60 s.
+    ref.listen<AnfitrionVisitantesState>(
+      anfitrionVisitantesViewModelProvider,
+      (prev, next) {
+        if (next.hasPendingExtensions &&
+            !(prev?.hasPendingExtensions ?? false)) {
+          if (_selectedIndex != 1) {
+            setState(() => _selectedIndex = 1);
+          }
+          ScaffoldMessenger.of(context).clearSnackBars();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text(
+                'Un visitante tardío espera tu autorización',
+              ),
+              backgroundColor: AppColors.warning,
+              duration: const Duration(seconds: 8),
+              action: SnackBarAction(
+                label: 'Ver',
+                textColor: Colors.white,
+                onPressed: () => setState(() => _selectedIndex = 1),
+              ),
+            ),
+          );
+        }
+      },
+    );
+
+    // Alertas de tiempo excesivo entre estados de visita.
+    // Se disparan una sola vez por visitante (deduplicadas en el VM).
+    ref.listen<AnfitrionVisitantesState>(
+      anfitrionVisitantesViewModelProvider,
+      (prev, next) {
+        if (next.pendingAlerts.isEmpty) return;
+
+        // Navegar a "Mis visitantes" si no está visible.
+        if (_selectedIndex != 1) {
+          setState(() => _selectedIndex = 1);
+        }
+
+        final messenger = ScaffoldMessenger.of(context);
+        for (final alert in next.pendingAlerts) {
+          final isEntrada = alert.type == VisitAlertType.entradaTardanza;
+          messenger.showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  FaIcon(
+                    isEntrada
+                        ? AppIcons.triangle
+                        : AppIcons.circleXmark,
+                    size: 14,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      alert.message,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor:
+                  isEntrada ? AppColors.warning : AppColors.error,
+              duration: const Duration(seconds: 10),
+              action: SnackBarAction(
+                label: 'Ver',
+                textColor: Colors.white,
+                onPressed: () => setState(() => _selectedIndex = 1),
+              ),
+            ),
+          );
+        }
+      },
+    );
+
     return HomeShell(
       child: Scaffold(
       backgroundColor: AppColors.appBackground,
       appBar: AppBar(
-        automaticallyImplyLeading: false, // sin flecha de retroceso
+        automaticallyImplyLeading: false,
         title: const Text('Panel de Anfitrión'),
         actions: [
           IconButton(
@@ -165,26 +251,68 @@ class _HomeAnfitrionViewState extends ConsumerState<HomeAnfitrionView> {
         currentIndex: _selectedIndex,
         onTap: (i) => setState(() => _selectedIndex = i),
         type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(
+        items: [
+          const BottomNavigationBarItem(
             icon: FaIcon(FontAwesomeIcons.listCheck, size: 17),
             label: 'Solicitudes',
           ),
           BottomNavigationBarItem(
-            icon: FaIcon(FontAwesomeIcons.usersLine, size: 17),
+            icon: hasExtensions
+                ? _BadgedIcon(
+                    icon: FontAwesomeIcons.usersLine,
+                    size: 17,
+                    badgeColor: AppColors.error,
+                  )
+                : const FaIcon(FontAwesomeIcons.usersLine, size: 17),
             label: 'Mis visitantes',
           ),
-          BottomNavigationBarItem(
+          const BottomNavigationBarItem(
             icon: FaIcon(FontAwesomeIcons.plus, size: 17),
             label: 'Nueva',
           ),
-          BottomNavigationBarItem(
+          const BottomNavigationBarItem(
             icon: FaIcon(FontAwesomeIcons.user, size: 17),
             label: 'Perfil',
           ),
         ],
       ),
     ),
+    );
+  }
+}
+
+/// Ícono con un punto rojo superpuesto para indicar notificaciones pendientes.
+class _BadgedIcon extends StatelessWidget {
+  const _BadgedIcon({
+    required this.icon,
+    required this.size,
+    required this.badgeColor,
+  });
+
+  final IconData icon;
+  final double size;
+  final Color badgeColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        FaIcon(icon, size: size),
+        Positioned(
+          top: -3,
+          right: -5,
+          child: Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: badgeColor,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 1.5),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -716,6 +844,8 @@ class _TabNuevaSolicitudState extends ConsumerState<_TabNuevaSolicitud> {
                 if (!v.contains('@')) return 'Correo inválido';
                 return null;
               },
+              onFieldSubmitted: (_) =>
+                  _checkVisitorByEmail(_correoCtrl, _nombreCtrl),
             ),
             const SizedBox(height: AppSpacing.blockGap),
 
@@ -840,6 +970,8 @@ class _TabNuevaSolicitudState extends ConsumerState<_TabNuevaSolicitud> {
                     persona: p,
                     numero: i + 1,
                     onEliminar: () => _eliminarPersona(i),
+                    onEmailSubmitted: () =>
+                        _checkVisitorByEmail(p.correoCtrl, p.nombreCtrl),
                   ),
                 );
               }),
@@ -926,7 +1058,131 @@ class _TabNuevaSolicitudState extends ConsumerState<_TabNuevaSolicitud> {
     }
   }
 
-  void _submit() {
+  /// Consulta la BD por [correoCtrl.text]. Si el correo existe con un nombre
+  /// distinto al que está en [nombreCtrl], muestra un diálogo para que el
+  /// usuario elija cuál conservar. Si el campo nombre estaba vacío, lo rellena
+  /// automáticamente con el nombre guardado.
+  Future<void> _checkVisitorByEmail(
+    TextEditingController correoCtrl,
+    TextEditingController nombreCtrl,
+  ) async {
+    final email = correoCtrl.text.trim();
+    if (email.isEmpty || !email.contains('@')) return;
+
+    final existing =
+        await ref.read(visitorRepositoryProvider).findByEmail(email);
+    if (existing == null || !mounted) return;
+
+    final storedName = existing.fullName;
+    final typedName = nombreCtrl.text.trim();
+
+    // Si el campo nombre está vacío: rellenar automáticamente.
+    if (typedName.isEmpty) {
+      nombreCtrl.text = storedName;
+      return;
+    }
+
+    // Si el nombre coincide: nada que hacer.
+    if (typedName == storedName) return;
+
+    // Conflicto: preguntar al usuario.
+    if (!mounted) return;
+    final useStored = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
+        ),
+        title: const Row(children: [
+          FaIcon(AppIcons.person, size: 16, color: AppColors.primary),
+          SizedBox(width: AppSpacing.sm),
+          Text('Visitante conocido'),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Este correo ya está registrado con otro nombre.',
+              style: AppTextStyles.caption,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _VisitorNameOption(
+              label: 'Nombre guardado',
+              name: storedName,
+              icon: AppIcons.circleCheck,
+              color: AppColors.primary,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            _VisitorNameOption(
+              label: 'Nombre que ingresaste',
+              name: typedName,
+              icon: AppIcons.edit,
+              color: AppColors.iconGray,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              '¿Cuál nombre deseas usar para esta visita?',
+              style: AppTextStyles.caption,
+            ),
+          ],
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actionsPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.md,
+          0,
+          AppSpacing.md,
+          AppSpacing.md,
+        ),
+        actions: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                  ),
+                ),
+                child: Text(
+                  'Usar "$storedName"',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              OutlinedButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.textContrast,
+                  side: const BorderSide(color: AppColors.borderGray),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                  ),
+                ),
+                child: Text(
+                  'Usar "$typedName"',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    if (useStored == true && mounted) {
+      nombreCtrl.text = storedName;
+    }
+    // Si useStored == false: se mantiene el nombre ingresado.
+    // findOrCreate(updateNameIfDifferent: true) actualizará la BD al enviar.
+  }
+
+  Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
     if (_scheduledDate == null || _scheduledTime == null) {
@@ -937,6 +1193,18 @@ class _TabNuevaSolicitudState extends ConsumerState<_TabNuevaSolicitud> {
         ),
       );
       return;
+    }
+
+    // Verificar todos los correos contra la BD antes de proceder.
+    // Si alguno ya está registrado con otro nombre, se muestra el diálogo
+    // y se espera la decisión del usuario antes de continuar.
+    final pairs = [
+      (_correoCtrl, _nombreCtrl),
+      ..._personasAdicionales.map((p) => (p.correoCtrl, p.nombreCtrl)),
+    ];
+    for (final (correo, nombre) in pairs) {
+      await _checkVisitorByEmail(correo, nombre);
+      if (!mounted) return;
     }
 
     final scheduledTimeStr =
@@ -1034,16 +1302,56 @@ class _ToleranceSelector extends StatelessWidget {
 // COMPONENTE — Tarjeta de persona adicional
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Fila de nombre para el diálogo de visitante existente.
+class _VisitorNameOption extends StatelessWidget {
+  const _VisitorNameOption({
+    required this.label,
+    required this.name,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final String name;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        FaIcon(icon, size: 12, color: color),
+        const SizedBox(width: AppSpacing.xs),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: AppTextStyles.caption.copyWith(color: AppColors.iconGray)),
+              Text(
+                name,
+                style: AppTextStyles.captionBold.copyWith(color: AppColors.textContrast),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _PersonaCard extends StatelessWidget {
   const _PersonaCard({
     required this.persona,
     required this.numero,
     required this.onEliminar,
+    this.onEmailSubmitted,
   });
 
   final _PersonaAdicional persona;
   final int numero;
   final VoidCallback onEliminar;
+  final VoidCallback? onEmailSubmitted;
 
   @override
   Widget build(BuildContext context) {
@@ -1130,6 +1438,9 @@ class _PersonaCard extends StatelessWidget {
               if (!v.contains('@')) return 'Correo inválido';
               return null;
             },
+            onFieldSubmitted: onEmailSubmitted != null
+                ? (_) => onEmailSubmitted!()
+                : null,
           ),
         ],
       ),
@@ -1197,8 +1508,7 @@ class _TabMisVisitantes extends ConsumerWidget {
       onRefresh: notifier.refresh,
       child: ListView.separated(
         padding: const EdgeInsets.all(AppSpacing.screenH),
-        itemCount: vm.visitantes.length + 1 +
-            (vm.hasPendingExtensions ? 1 : 0),
+        itemCount: vm.visitantes.length + 1,
         separatorBuilder: (_, _) =>
             const SizedBox(height: AppSpacing.listItemGap),
         itemBuilder: (ctx, i) {
@@ -1230,18 +1540,8 @@ class _TabMisVisitantes extends ConsumerWidget {
               ?? EstatusVisitante.enEspera;
           final isProcessing = vm.isProcessing(itemId);
 
-          // Convertir DTO al modelo de presentación para el card existente.
-          final visitante = VisitanteModel(
-            id: itemId.toString(),
-            nombre: dto.visitor.fullName,
-            destino: 'Tu oficina',
-            horaEstimada: dto.formattedTime,
-            correo: dto.visitor.email,
-            estatus: estatus,
-          );
-
           return _VisitanteAnfitrionCard(
-            visitante: visitante,
+            dto: dto,
             isProcessing: isProcessing,
             onLlegadaOficina: estatus == EstatusVisitante.enInstituto
                 ? () => notifier.confirmarLlegadaOficina(itemId)
@@ -1258,23 +1558,60 @@ class _TabMisVisitantes extends ConsumerWidget {
 
 /// Tarjeta que presenta el estado de un visitante y las acciones disponibles
 /// para el Anfitrión.
-class _VisitanteAnfitrionCard extends StatelessWidget {
+class _VisitanteAnfitrionCard extends StatefulWidget {
   const _VisitanteAnfitrionCard({
-    required this.visitante,
+    required this.dto,
     this.onLlegadaOficina,
     this.onSalidaOficina,
     this.isProcessing = false,
   });
 
-  final VisitanteModel visitante;
+  final ActiveVisitDto dto;
   final VoidCallback? onLlegadaOficina;
   final VoidCallback? onSalidaOficina;
   final bool isProcessing;
 
   @override
+  State<_VisitanteAnfitrionCard> createState() =>
+      _VisitanteAnfitrionCardState();
+}
+
+class _VisitanteAnfitrionCardState extends State<_VisitanteAnfitrionCard> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresca los contadores cada 30 s para visitas activas.
+    if (!widget.dto.isFinished) {
+      _tick = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) { if (mounted) setState(() {}); },
+      );
+    }
+  }
+
+  @override
+  void didUpdateWidget(_VisitanteAnfitrionCard old) {
+    super.didUpdateWidget(old);
+    if (!old.dto.isFinished && widget.dto.isFinished) {
+      _tick?.cancel();
+      _tick = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final est = visitante.estatus;
+    final dto = widget.dto;
+    final est = dto.currentEvent?.toEstatusVisitante() ?? EstatusVisitante.enEspera;
     final color = est.color;
+    final hasActions = widget.onLlegadaOficina != null || widget.onSalidaOficina != null;
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.cardPadding),
@@ -1286,6 +1623,7 @@ class _VisitanteAnfitrionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Encabezado ────────────────────────────────────────
           Row(
             children: [
               Container(
@@ -1295,58 +1633,41 @@ class _VisitanteAnfitrionCard extends StatelessWidget {
                   color: color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
                 ),
-                child: Center(
-                  child: FaIcon(AppIcons.person, size: 22, color: color),
-                ),
+                child: Center(child: FaIcon(AppIcons.person, size: 22, color: color)),
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(visitante.nombre, style: AppTextStyles.bodyBold),
-                    const SizedBox(height: 2),
-                    if (visitante.correo != null)
-                      Row(
-                        children: [
-                          FaIcon(
-                            AppIcons.email,
-                            size: 10,
-                            color: AppColors.iconGray,
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              visitante.correo!,
-                              style: AppTextStyles.caption,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        FaIcon(
-                          AppIcons.clock,
-                          size: 10,
-                          color: AppColors.iconGray,
-                        ),
+                    Text(dto.visitor.fullName, style: AppTextStyles.bodyBold),
+                    if (dto.visitor.email != null) ...[
+                      const SizedBox(height: 2),
+                      Row(children: [
+                        const FaIcon(AppIcons.email, size: 10, color: AppColors.iconGray),
                         const SizedBox(width: 4),
-                        Text(
-                          'Estimada: ${visitante.horaEstimada}',
-                          style: AppTextStyles.caption,
+                        Expanded(
+                          child: Text(
+                            dto.visitor.email!,
+                            style: AppTextStyles.caption,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ],
-                    ),
+                      ]),
+                    ],
+                    if (dto.formattedTime != '—') ...[
+                      const SizedBox(height: 2),
+                      Row(children: [
+                        const FaIcon(AppIcons.clock, size: 10, color: AppColors.iconGray),
+                        const SizedBox(width: 4),
+                        Text('Estimada: ${dto.formattedTime}', style: AppTextStyles.caption),
+                      ]),
+                    ],
                   ],
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: 4,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(20),
@@ -1354,13 +1675,14 @@ class _VisitanteAnfitrionCard extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    FaIcon(est.icon, size: 10, color: color),
+                    FaIcon(est.icon, size: 9, color: color),
                     const SizedBox(width: 3),
                     Text(
                       est.label,
                       style: AppTextStyles.caption.copyWith(
                         color: color,
                         fontWeight: FontWeight.w600,
+                        fontSize: 10,
                       ),
                     ),
                   ],
@@ -1369,78 +1691,204 @@ class _VisitanteAnfitrionCard extends StatelessWidget {
             ],
           ),
 
-          if (onLlegadaOficina != null || onSalidaOficina != null) ...[
+          const SizedBox(height: AppSpacing.sm),
+          const Divider(height: 1),
+          const SizedBox(height: AppSpacing.sm),
+
+          // ── Seguimiento ───────────────────────────────────────
+          if (dto.isFinished)
+            _buildResumen(dto)
+          else
+            _buildContadores(dto, est),
+
+          // ── Acciones ──────────────────────────────────────────
+          if (hasActions) ...[
             const SizedBox(height: AppSpacing.sm),
-            const Divider(height: 1),
-            const SizedBox(height: AppSpacing.sm),
-          ],
-
-          if (onLlegadaOficina != null)
-            _BtnAccion(
-              label: 'Llegó a mi oficina',
-              icon: AppIcons.building,
-              color: AppColors.success,
-              onTap: isProcessing ? null : onLlegadaOficina,
-              isLoading: isProcessing,
-            ),
-
-          if (onSalidaOficina != null)
-            _BtnAccion(
-              label: 'Salió de mi oficina',
-              icon: AppIcons.personWalking,
-              color: AppColors.info,
-              onTap: isProcessing ? null : onSalidaOficina,
-              isLoading: isProcessing,
-            ),
-
-          if (est == EstatusVisitante.salidoOficina) ...[
-            const SizedBox(height: AppSpacing.xs),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.xs,
+            if (widget.onLlegadaOficina != null)
+              _BtnAccion(
+                label: 'Llegó a mi oficina',
+                icon: AppIcons.building,
+                color: AppColors.success,
+                onTap: widget.isProcessing ? null : widget.onLlegadaOficina,
+                isLoading: widget.isProcessing,
               ),
-              decoration: BoxDecoration(
-                color: AppColors.info.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+            if (widget.onSalidaOficina != null) ...[
+              if (widget.onLlegadaOficina != null)
+                const SizedBox(height: AppSpacing.xs),
+              _BtnAccion(
+                label: 'Salió de mi oficina',
+                icon: AppIcons.personWalking,
+                color: AppColors.info,
+                onTap: widget.isProcessing ? null : widget.onSalidaOficina,
+                isLoading: widget.isProcessing,
               ),
-              child: Row(
-                children: [
-                  FaIcon(AppIcons.circleInfo, size: 11, color: AppColors.info),
-                  const SizedBox(width: AppSpacing.xs),
-                  Text(
-                    'Salió de tu oficina — sigue en el instituto',
-                    style: AppTextStyles.caption.copyWith(
-                      color: AppColors.info,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          if (est == EstatusVisitante.salidoInstituto) ...[
-            const SizedBox(height: AppSpacing.xs),
-            Row(
-              children: [
-                FaIcon(
-                  AppIcons.circleCheck,
-                  size: 12,
-                  color: AppColors.iconGray,
-                ),
-                const SizedBox(width: AppSpacing.xs),
-                Text(
-                  'Salió del instituto',
-                  style: AppTextStyles.caption.copyWith(
-                    color: AppColors.iconGray,
-                  ),
-                ),
-              ],
-            ),
+            ],
           ],
         ],
       ),
     );
+  }
+
+  // ── Contadores para visita activa ─────────────────────────────────────────
+
+  Widget _buildContadores(ActiveVisitDto dto, EstatusVisitante est) {
+    final now = DateTime.now();
+    final rows = <Widget>[];
+
+    if (dto.entradaAt != null) {
+      final elapsed = now.difference(dto.entradaAt!);
+      final warn = dto.needsEntradaAlert && est == EstatusVisitante.enInstituto;
+      rows.add(_trackRow(
+        icon: AppIcons.doorEnter,
+        label: est == EstatusVisitante.enInstituto
+            ? 'En camino a tu oficina'
+            : 'Entró al ITT',
+        value: _fmtDur(elapsed),
+        warn: warn,
+      ));
+    }
+
+    if (dto.llegadaOficinaAt != null && est == EstatusVisitante.enOficina) {
+      rows.add(const SizedBox(height: AppSpacing.xs));
+      rows.add(_trackRow(
+        icon: AppIcons.doorOpen,
+        label: 'En tu oficina',
+        value: _fmtDur(now.difference(dto.llegadaOficinaAt!)),
+        warn: false,
+      ));
+    }
+
+    if (dto.salidaOficinaAt != null) {
+      final warn = dto.needsSalidaOficinaAlert;
+      rows.add(const SizedBox(height: AppSpacing.xs));
+      rows.add(_trackRow(
+        icon: AppIcons.personWalking,
+        label: 'Saliendo del ITT',
+        value: _fmtDur(now.difference(dto.salidaOficinaAt!)),
+        warn: warn,
+      ));
+    }
+
+    if (rows.isEmpty) {
+      rows.add(_trackRow(
+        icon: AppIcons.hourglassHalf,
+        label: 'Esperando llegada',
+        value: '—',
+        warn: false,
+      ));
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows);
+  }
+
+  // ── Resumen para visita finalizada ────────────────────────────────────────
+
+  Widget _buildResumen(ActiveVisitDto dto) {
+    final rows = <Widget>[];
+
+    if (dto.entradaAt != null) {
+      rows.add(_summaryRow(
+        icon: AppIcons.doorEnter,
+        label: 'Entró al ITT',
+        value: _fmtTime(dto.entradaAt!),
+        color: AppColors.primary,
+      ));
+    }
+    if (dto.entradaAt != null && dto.llegadaOficinaAt != null) {
+      rows.add(const SizedBox(height: AppSpacing.xs));
+      rows.add(_summaryRow(
+        icon: AppIcons.personWalking,
+        label: 'Tiempo en llegar a oficina',
+        value: _fmtDur(dto.llegadaOficinaAt!.difference(dto.entradaAt!)),
+        color: AppColors.warning,
+      ));
+    }
+    if (dto.llegadaOficinaAt != null && dto.salidaOficinaAt != null) {
+      rows.add(const SizedBox(height: AppSpacing.xs));
+      rows.add(_summaryRow(
+        icon: AppIcons.doorOpen,
+        label: 'Tiempo con anfitrión',
+        value: _fmtDur(dto.salidaOficinaAt!.difference(dto.llegadaOficinaAt!)),
+        color: AppColors.success,
+      ));
+    }
+    if (dto.salidaOficinaAt != null && dto.salidaInstitucionAt != null) {
+      rows.add(const SizedBox(height: AppSpacing.xs));
+      rows.add(_summaryRow(
+        icon: AppIcons.personWalking,
+        label: 'Tiempo de salida del ITT',
+        value: _fmtDur(
+          dto.salidaInstitucionAt!.difference(dto.salidaOficinaAt!),
+        ),
+        color: AppColors.iconGray,
+      ));
+    }
+    if (dto.salidaInstitucionAt != null) {
+      rows.add(const SizedBox(height: AppSpacing.xs));
+      rows.add(_summaryRow(
+        icon: AppIcons.doorExit,
+        label: 'Salió del ITT',
+        value: _fmtTime(dto.salidaInstitucionAt!),
+        color: AppColors.borderGray,
+      ));
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows);
+  }
+
+  // ── Widgets auxiliares ────────────────────────────────────────────────────
+
+  Widget _trackRow({
+    required IconData icon,
+    required String label,
+    required String value,
+    required bool warn,
+  }) {
+    final color = warn ? AppColors.error : AppColors.primary;
+    return Row(children: [
+      FaIcon(icon, size: 11, color: color),
+      const SizedBox(width: AppSpacing.xs),
+      Expanded(
+        child: Text(
+          '$label: $value${warn ? '  ⚠ +30 min' : ''}',
+          style: AppTextStyles.caption.copyWith(
+            color: color,
+            fontWeight: warn ? FontWeight.w600 : FontWeight.normal,
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _summaryRow({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Row(children: [
+      FaIcon(icon, size: 11, color: color),
+      const SizedBox(width: AppSpacing.xs),
+      Expanded(
+        child: Text(
+          '$label: $value',
+          style: AppTextStyles.caption.copyWith(color: AppColors.textContrast),
+        ),
+      ),
+    ]);
+  }
+
+  // ── Formateo ──────────────────────────────────────────────────────────────
+
+  static String _fmtTime(DateTime dt) =>
+      '${dt.hour.toString().padLeft(2, '0')}:'
+      '${dt.minute.toString().padLeft(2, '0')}';
+
+  static String _fmtDur(Duration d) {
+    if (d.inHours >= 1) {
+      return '${d.inHours}h ${d.inMinutes.remainder(60)}min';
+    }
+    return '${d.inMinutes}min';
   }
 }
 

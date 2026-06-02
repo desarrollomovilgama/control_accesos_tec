@@ -123,7 +123,11 @@ class NuevaSolicitudViewModel extends Notifier<NuevaSolicitudState> {
     }
 
     // ── Validación de ventana horaria institucional (07:00–19:00) ────────────
-    final timeError = _validateTimeWindow(scheduledTime, toleranceMinutes);
+    final timeError = _validateTimeWindow(
+      scheduledTime,
+      toleranceMinutes,
+      scheduledDate,
+    );
     if (timeError != null) {
       state = state.copyWith(errorMsg: timeError);
       return;
@@ -179,6 +183,7 @@ class NuevaSolicitudViewModel extends Notifier<NuevaSolicitudState> {
         final visitor = await _visitorRepo.findOrCreate(
           fullName: v.nombre,
           email: v.correo,
+          updateNameIfDifferent: true,
         );
         items.add(
           RequestItemDbModel(
@@ -209,10 +214,15 @@ class NuevaSolicitudViewModel extends Notifier<NuevaSolicitudState> {
   // ── Validación de ventana horaria ─────────────────────────────────────────
 
   /// Verifica que la visita quepa dentro del horario institucional 07:00–19:00,
-  /// considerando la tolerancia (± [toleranceMinutes]).
+  /// considerando la tolerancia (± [toleranceMinutes]), y que la hora no haya
+  /// pasado ya cuando se programa para el día de hoy.
   ///
   /// Retorna un mensaje de error si la validación falla, o `null` si es válido.
-  String? _validateTimeWindow(String scheduledTime, int toleranceMinutes) {
+  String? _validateTimeWindow(
+    String scheduledTime,
+    int toleranceMinutes,
+    DateTime scheduledDate,
+  ) {
     // Parsear 'HH:MM:SS' o 'HH:MM'.
     final parts = scheduledTime.split(':');
     if (parts.length < 2) return 'Formato de hora inválido.';
@@ -241,6 +251,21 @@ class NuevaSolicitudViewModel extends Notifier<NuevaSolicitudState> {
       return 'Con tolerancia de ${toleranceMinutes}min, la ventana de llegada '
           'termina a las $latest, después del cierre institucional (19:00).\n'
           'Elige una hora igual o anterior a las ${_fmtMin(closeMin - toleranceMinutes)}.';
+    }
+
+    // Si la visita es hoy, la hora programada debe ser futura.
+    // autoRejectExpired rechaza cuando scheduled_time + tolerance < CURTIME(),
+    // así que bloqueamos en origen si el tiempo ya venció o está por vencer.
+    final now = DateTime.now();
+    final isToday = scheduledDate.year == now.year &&
+        scheduledDate.month == now.month &&
+        scheduledDate.day == now.day;
+
+    if (isToday) {
+      final nowMin = now.hour * 60 + now.minute;
+      if (scheduledMin <= nowMin) {
+        return 'La hora programada ya pasó. Elige una hora futura para hoy.';
+      }
     }
 
     return null; // válido

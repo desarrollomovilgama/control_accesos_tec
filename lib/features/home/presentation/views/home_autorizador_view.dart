@@ -10,6 +10,8 @@
 
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -23,8 +25,10 @@ import '../../../../core/config/app_spacing.dart';
 import '../../../../core/config/app_text_styles.dart';
 import '../../../../core/widgets/empty_state.dart';
 import '../../../../core/widgets/primary_button.dart';
+import '../../data/models/access_log_db_model.dart';
 import '../../data/models/request_db_model.dart';
 import '../../data/models/request_summary_dto.dart';
+import '../../data/repositories/access_log_repository.dart';
 import '../viewmodels/autorizador_viewmodel.dart';
 
 // ── Extensión de presentación ──────────────────────────────────────────────
@@ -147,6 +151,7 @@ class _HomeAutorizadorViewState extends ConsumerState<HomeAutorizadorView> {
                   titulo: 'Solicitudes aprobadas',
                   badgeColor: AppColors.success,
                   emptyLabel: 'Sin solicitudes aprobadas',
+                  showTracking: true,
                 ),
                 _TabHistorial(
                   items: vm.rejected,
@@ -248,18 +253,22 @@ class _TabPendientes extends ConsumerWidget {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// Tab genérico para mostrar el historial de solicitudes procesadas.
+/// Con [showTracking] activo (tab de aprobadas) cada tarjeta incluye
+/// un panel expandible de seguimiento de visitantes.
 class _TabHistorial extends StatelessWidget {
   const _TabHistorial({
     required this.items,
     required this.titulo,
     required this.badgeColor,
     required this.emptyLabel,
+    this.showTracking = false,
   });
 
   final List<RequestSummaryDto> items;
   final String titulo;
   final Color badgeColor;
   final String emptyLabel;
+  final bool showTracking;
 
   @override
   Widget build(BuildContext context) {
@@ -284,7 +293,10 @@ class _TabHistorial extends StatelessWidget {
             badgeColor: badgeColor,
           );
         }
-        return _SolicitudCard(data: items[i - 1]);
+        final data = items[i - 1];
+        return showTracking
+            ? _AprobadaCard(data: data)
+            : _SolicitudCard(data: data);
       },
     );
   }
@@ -542,6 +554,333 @@ class _SectionHeader extends StatelessWidget {
 }
 
 /// Panel de error con botón de reintento.
+// ═════════════════════════════════════════════════════════════════════════════
+// Tarjeta aprobada con seguimiento expandible
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Variante de [_SolicitudCard] para solicitudes aprobadas que incluye
+/// un panel expandible con el seguimiento de cada visitante.
+class _AprobadaCard extends ConsumerStatefulWidget {
+  const _AprobadaCard({required this.data});
+
+  final RequestSummaryDto data;
+
+  @override
+  ConsumerState<_AprobadaCard> createState() => _AprobadaCardState();
+}
+
+class _AprobadaCardState extends ConsumerState<_AprobadaCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _SolicitudCard(data: widget.data),
+        // ── Toggle de seguimiento ──────────────────────────────
+        GestureDetector(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: AppSpacing.xs,
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.iceBlue,
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(AppSpacing.radiusCard),
+              ),
+              border: Border.all(color: AppColors.borderGray),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                FaIcon(
+                  _expanded ? AppIcons.chevronRight : AppIcons.clock,
+                  size: 10,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  _expanded ? 'Ocultar seguimiento' : 'Ver seguimiento',
+                  style: AppTextStyles.caption.copyWith(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // ── Panel de seguimiento ───────────────────────────────
+        if (_expanded)
+          _TrackingPanel(requestId: widget.data.requestId),
+      ],
+    );
+  }
+}
+
+/// Carga y muestra el seguimiento de visitantes de una solicitud.
+class _TrackingPanel extends ConsumerWidget {
+  const _TrackingPanel({required this.requestId});
+
+  final int requestId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tracking = ref.watch(visitTrackingProvider(requestId));
+
+    return Container(
+      margin: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.iceBlue,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusCard),
+        border: Border.all(color: AppColors.borderGray),
+      ),
+      child: tracking.when(
+        loading: () => const Center(
+          child: Padding(
+            padding: EdgeInsets.all(AppSpacing.sm),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+        error: (_, _) => Text(
+          'Error al cargar seguimiento',
+          style: AppTextStyles.caption.copyWith(color: AppColors.error),
+        ),
+        data: (dtos) {
+          if (dtos.isEmpty) {
+            return Row(children: [
+              const FaIcon(AppIcons.hourglassHalf, size: 12, color: AppColors.iconGray),
+              const SizedBox(width: AppSpacing.xs),
+              Text('Sin eventos registrados aún', style: AppTextStyles.caption),
+            ]);
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: dtos
+                .map((dto) => _VisitaTrackingMiniCard(dto: dto))
+                .toList(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Mini-tarjeta de seguimiento de un visitante para el panel del Autorizador.
+class _VisitaTrackingMiniCard extends StatefulWidget {
+  const _VisitaTrackingMiniCard({required this.dto});
+
+  final ActiveVisitDto dto;
+
+  @override
+  State<_VisitaTrackingMiniCard> createState() =>
+      _VisitaTrackingMiniCardState();
+}
+
+class _VisitaTrackingMiniCardState extends State<_VisitaTrackingMiniCard> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.dto.isFinished) {
+      _tick = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) { if (mounted) setState(() {}); },
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dto = widget.dto;
+    final event = dto.currentEvent;
+    final statusLabel = _statusLabel(event);
+    final statusColor = _statusColor(event);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: Container(
+        padding: const EdgeInsets.all(AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: AppColors.appBackground,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+          border: Border.all(color: statusColor.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Nombre + badge
+            Row(children: [
+              Expanded(
+                child: Text(dto.visitor.fullName, style: AppTextStyles.captionBold),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: AppTextStyles.caption.copyWith(
+                    color: statusColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 10,
+                  ),
+                ),
+              ),
+            ]),
+
+            const SizedBox(height: AppSpacing.xs),
+
+            // Timeline o contadores
+            if (dto.isFinished)
+              ..._buildResumen(dto)
+            else
+              ..._buildContadores(dto),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildContadores(ActiveVisitDto dto) {
+    final now = DateTime.now();
+    final rows = <Widget>[];
+
+    if (dto.entradaAt != null) {
+      final warn = dto.needsEntradaAlert &&
+          dto.currentEvent == AccessEventType.entradaInstitucion;
+      rows.add(_row(
+        icon: AppIcons.doorEnter,
+        text: 'En ITT: ${_dur(now.difference(dto.entradaAt!))}${warn ? '  ⚠' : ''}',
+        color: warn ? AppColors.error : AppColors.primary,
+      ));
+    }
+    if (dto.llegadaOficinaAt != null &&
+        dto.currentEvent == AccessEventType.llegadaOficina) {
+      rows.add(_row(
+        icon: AppIcons.doorOpen,
+        text: 'En oficina: ${_dur(now.difference(dto.llegadaOficinaAt!))}',
+        color: AppColors.success,
+      ));
+    }
+    if (dto.salidaOficinaAt != null) {
+      final warn = dto.needsSalidaOficinaAlert;
+      rows.add(_row(
+        icon: AppIcons.personWalking,
+        text: 'Saliendo: ${_dur(now.difference(dto.salidaOficinaAt!))}${warn ? '  ⚠' : ''}',
+        color: warn ? AppColors.error : AppColors.info,
+      ));
+    }
+    if (rows.isEmpty) {
+      rows.add(_row(
+        icon: AppIcons.hourglassHalf,
+        text: 'Sin llegada registrada',
+        color: AppColors.iconGray,
+      ));
+    }
+    return rows;
+  }
+
+  List<Widget> _buildResumen(ActiveVisitDto dto) {
+    final rows = <Widget>[];
+    if (dto.entradaAt != null) {
+      rows.add(_row(
+        icon: AppIcons.doorEnter,
+        text: 'Entró: ${_time(dto.entradaAt!)}',
+        color: AppColors.primary,
+      ));
+    }
+    if (dto.entradaAt != null && dto.llegadaOficinaAt != null) {
+      rows.add(_row(
+        icon: AppIcons.personWalking,
+        text: 'A oficina: ${_dur(dto.llegadaOficinaAt!.difference(dto.entradaAt!))}',
+        color: AppColors.warning,
+      ));
+    }
+    if (dto.llegadaOficinaAt != null && dto.salidaOficinaAt != null) {
+      rows.add(_row(
+        icon: AppIcons.doorOpen,
+        text: 'En oficina: ${_dur(dto.salidaOficinaAt!.difference(dto.llegadaOficinaAt!))}',
+        color: AppColors.success,
+      ));
+    }
+    if (dto.salidaOficinaAt != null && dto.salidaInstitucionAt != null) {
+      rows.add(_row(
+        icon: AppIcons.personWalking,
+        text: 'Salida: ${_dur(dto.salidaInstitucionAt!.difference(dto.salidaOficinaAt!))}',
+        color: AppColors.iconGray,
+      ));
+    }
+    if (dto.salidaInstitucionAt != null) {
+      rows.add(_row(
+        icon: AppIcons.doorExit,
+        text: 'Salió: ${_time(dto.salidaInstitucionAt!)}',
+        color: AppColors.borderGray,
+      ));
+    }
+    return rows;
+  }
+
+  static Widget _row({
+    required IconData icon,
+    required String text,
+    required Color color,
+  }) =>
+      Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(children: [
+          FaIcon(icon, size: 10, color: color),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTextStyles.caption.copyWith(color: color),
+            ),
+          ),
+        ]),
+      );
+
+  static String _time(DateTime dt) =>
+      '${dt.hour.toString().padLeft(2, '0')}:'
+      '${dt.minute.toString().padLeft(2, '0')}';
+
+  static String _dur(Duration d) =>
+      d.inHours >= 1 ? '${d.inHours}h ${d.inMinutes.remainder(60)}min' : '${d.inMinutes}min';
+
+  static String _statusLabel(AccessEventType? e) => switch (e) {
+    null => 'Sin llegada',
+    AccessEventType.entradaInstitucion => 'En ITT',
+    AccessEventType.llegadaOficina => 'En oficina',
+    AccessEventType.salidaOficina => 'Salió oficina',
+    AccessEventType.salidaInstitucion => 'Finalizado',
+  };
+
+  static Color _statusColor(AccessEventType? e) => switch (e) {
+    null => AppColors.iconGray,
+    AccessEventType.entradaInstitucion => AppColors.warning,
+    AccessEventType.llegadaOficina => AppColors.success,
+    AccessEventType.salidaOficina => AppColors.info,
+    AccessEventType.salidaInstitucion => AppColors.borderGray,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _ErrorPanel extends StatelessWidget {
   const _ErrorPanel({required this.message, required this.onRetry});
 

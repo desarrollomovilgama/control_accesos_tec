@@ -74,9 +74,21 @@ class AccessLogDbModel {
     );
   }
 
-  /// Mapa para INSERT (sin log_id y registered_at — auto en BD).
-  Map<String, dynamic> toInsertMap() => {
-    'item_id': itemId,
-    'event_type': eventType.dbValue,
-  };
+  /// Mapa para INSERT. Incluye registered_at con hora LOCAL del dispositivo
+  /// en lugar de depender de NOW() del servidor (Railway UTC vs UTC-6 local).
+  Map<String, dynamic> toInsertMap() {
+    final dt = registeredAt ?? DateTime.now();
+    return {
+      'item_id': itemId,
+      'event_type': eventType.dbValue,
+      'registered_at': _fmtDatetime(dt),
+    };
+  }
+
+  static String _fmtDatetime(DateTime dt) =>
+      '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
+      '${dt.day.toString().padLeft(2, '0')} '
+      '${dt.hour.toString().padLeft(2, '0')}:'
+      '${dt.minute.toString().padLeft(2, '0')}:'
+      '${dt.second.toString().padLeft(2, '0')}';
 }
