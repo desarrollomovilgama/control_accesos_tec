@@ -1,8 +1,8 @@
-name: pr_c
+name: control_accesos
 description: "Sistema de control de accesos para el ITT — GAMA Móvil."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.12.2+15
 
 environment:
   sdk: ^3.11.1
@@ -50,8 +50,8 @@ dependencies:
   # Gestión de permisos en runtime
   permission_handler: ^11.3.1
 
-  # Persistencia de sesión entre reinicios de la app
-  shared_preferences: ^2.3.2
+  # Persistencia segura de sesión entre reinicios de la app (MPF §7.2)
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:

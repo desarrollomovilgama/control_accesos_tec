@@ -17,7 +17,11 @@
       "Bash(flutter run *)",
       "Bash(findstr sim_card)",
       "Bash(dir /s /b \"%LOCALAPPDATA%\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\sim_card_info*\")",
-      "Bash(findstr \"\\\\.dart$\")"
+      "Bash(findstr \"\\\\.dart$\")",
+      "Bash(extract-text \"C:\\\\Users\\\\luist\\\\OneDrive\\\\8o Semestre\\\\AUDI TICS\\\\GAMA-MD-F-08.docx\")",
+      "Bash(pandoc \"C:\\\\Users\\\\luist\\\\OneDrive\\\\8o Semestre\\\\AUDI TICS\\\\GAMA-MD-F-08.docx\" -t markdown)",
+      "Read(//c/Users/luist/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/6cc8a642-6b0c-4e3e-95f6-0af71301aeed/c035431b-2c2d-4b8b-a698-326329ffb411/skills/docx/**)",
+      "Bash(python scripts/office/unpack.py \"C:/Users/luist/OneDrive/8o Semestre/AUDI TICS/GAMA-MD-F-08.docx\" /tmp/gama_unpacked/)"
     ]
   }
 }

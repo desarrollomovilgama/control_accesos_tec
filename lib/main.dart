@@ -27,7 +27,7 @@ import 'features/home/presentation/views/home_guardia_view.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Cargar variables de entorno desde .env (MPF §8.1).
+  // Cargar variables de entorno desde .env (MPF 8.1).
   await dotenv.load(fileName: '.env');
 
   // Restaurar sesiones persistidas.
@@ -36,8 +36,7 @@ Future<void> main() async {
 
   // Construir overrides de Riverpod con las sesiones restauradas.
   final overrides = <Override>[
-    if (samSession != null)
-      sessionProvider.overrideWith((ref) => samSession),
+    if (samSession != null) sessionProvider.overrideWith((ref) => samSession),
     if (guardiaSession != null)
       guardiaSessionProvider.overrideWith((ref) => guardiaSession),
   ];

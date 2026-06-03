@@ -164,7 +164,7 @@ class SamUserModel {
   }
 
   /// Reconstruye un [SamUserModel] desde el JSON producido por [toJson].
-  /// Usado para restaurar la sesión persistida en SharedPreferences.
+  /// Usado para restaurar la sesión persistida en Flutter Secure Storage.
   factory SamUserModel.fromJson(Map<String, dynamic> json) {
     return SamUserModel(
       username: json['username'] as String? ?? '',
